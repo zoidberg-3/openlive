@@ -472,7 +472,15 @@ export function useLiveSession(chatId: string) {
 
       // 2. Mic stream — chosen device + browser AEC (so the agent's own voice is
       //    cancelled from the mic and can't self-trigger barge-in).
-      const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true,
+        // autoGainControl OFF: Chromium's AGC drives the *analog* capture gain, and on
+        // laptops whose ALSA mic already carries a large fixed boost (e.g. Capture +30 dB
+        // plus "Internal Mic Boost" +10 dB) it pins the input to the rails. A clipped,
+        // permanently-saturated signal reads to Silero as unbroken speech: speech START
+        // fires over and over, silence is never observed, onSpeechEnd never runs, and the
+        // call sits on LISTENING forever with nothing sent. Measured on an AMD Stoney
+        // laptop: 40.5% of samples at +/-32768, quietest 1s RMS 0.145 vs a 0.03 gate.
+        autoGainControl: false };
       const micId = useLiveStore.getState().micId;
       if (micId) audio.deviceId = { exact: micId };
       const stream = await navigator.mediaDevices.getUserMedia({ audio });
@@ -720,7 +728,15 @@ export function useLiveSession(chatId: string) {
     set({ micId: id || undefined });
     if (!useLiveStore.getState().active || !engine.current) return;
     try {
-      const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true,
+        // autoGainControl OFF: Chromium's AGC drives the *analog* capture gain, and on
+        // laptops whose ALSA mic already carries a large fixed boost (e.g. Capture +30 dB
+        // plus "Internal Mic Boost" +10 dB) it pins the input to the rails. A clipped,
+        // permanently-saturated signal reads to Silero as unbroken speech: speech START
+        // fires over and over, silence is never observed, onSpeechEnd never runs, and the
+        // call sits on LISTENING forever with nothing sent. Measured on an AMD Stoney
+        // laptop: 40.5% of samples at +/-32768, quietest 1s RMS 0.145 vs a 0.03 gate.
+        autoGainControl: false };
       if (id) audio.deviceId = { exact: id };
       const stream = await navigator.mediaDevices.getUserMedia({ audio });
       const old = micStream.current;

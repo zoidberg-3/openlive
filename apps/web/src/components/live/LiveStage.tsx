@@ -95,7 +95,7 @@ export function MicMeter({ micId, onGranted }: { micId?: string; onGranted: () =
     setDenied(false);
     (async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: micId ? { deviceId: { exact: micId } } : true });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: micId ? { deviceId: { exact: micId }, echoCancellation: true, noiseSuppression: true, autoGainControl: false } : { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
         if (stopped) { stream.getTracks().forEach((t) => t.stop()); return; }
         onGranted();
         ctx = new AudioContext();

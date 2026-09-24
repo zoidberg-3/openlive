@@ -30,8 +30,83 @@ function resetWorker() {
   for (const [id, p] of pending) { pending.delete(id); p.reject(new Error("models reset")); }
 }
 
+// ── WebGPU capability probe (cached) ─────────────────────────────────────────
+// `"gpu" in navigator` proves only that the WebGPU *API is exposed*, NOT that a
+// usable adapter exists. Chromium — and therefore Electron — still exposes
+// `navigator.gpu` on machines whose GPU or driver is blocklisted, where
+// `requestAdapter()` resolves to **null**.
+//
+// Classifying such a machine as "webgpu" is not a graceful degradation, it is a
+// hang: the worker loads the fp32 WebGPU weights and then awaits a device that
+// never arrives, so it never posts "ready", `loadModels()` never settles, and the
+// pre-call screen sits at "loading" forever with no error. (Inference calls have
+// CALL_TIMEOUT_MS below; the *load* has no timeout, which is why this presents as
+// silence rather than a failure.)
+//
+// Probed ONCE and cached because `hasWebGPU()` is read from synchronous contexts
+// that cannot become async: React render in Lobby.tsx / PipelineSettings.tsx, and
+// the partial-STT hot path in voiceEngine.ts.
+let webgpuProbe: Promise<boolean> | null = null;
+let webgpuOk = false;
+
+// Escape hatch, because "an adapter exists" is NOT the same as "this GPU can run
+// these graphs usefully". An old integrated GPU with a handful of compute units
+// hands out a perfectly valid adapter and then spends longer compiling the ONNX
+// shader pipelines than WASM would have taken to infer the whole utterance —
+// presenting as a load that never finishes. Auto-detection cannot tell those apart
+// (there is no portable "how fast is this GPU" query), so the user gets a pin.
+//   localStorage["openlive-force-device"] = "wasm" | "webgpu"   (unset = auto)
+export type DeviceOverride = "wasm" | "webgpu";
+function deviceOverride(): DeviceOverride | null {
+  try {
+    const v = localStorage.getItem("openlive-force-device");
+    return v === "wasm" || v === "webgpu" ? v : null;
+  } catch {
+    return null; // private mode / no storage
+  }
+}
+
+/** Resolve (once) whether the WebGPU tier should be used: user pin, else a real
+ *  adapter request. */
+export function probeWebGPU(): Promise<boolean> {
+  webgpuProbe ??= (async () => {
+    const pinned = deviceOverride();
+    if (pinned) {
+      webgpuOk = pinned === "webgpu";
+      console.info(`[live] device tier PINNED to ${pinned} via openlive-force-device`);
+      return webgpuOk;
+    }
+    try {
+      const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+      webgpuOk = !!gpu && !!(await gpu.requestAdapter());
+    } catch {
+      webgpuOk = false; // adapter request threw → treat as unavailable
+    }
+    return webgpuOk;
+  })();
+  return webgpuProbe;
+}
+
+// Start the probe at import time so the first render usually reads a settled
+// value. Guarded for SSR, where there is no navigator.
+if (typeof navigator !== "undefined") void probeWebGPU();
+
+// TEMP DEBUG BRIDGE (2026-09-24): expose the inference facade on window so the
+// pipeline can be exercised directly from DevTools/CDP, without driving the UI or
+// needing a working microphone. Lets us answer "does STT work at all here?"
+// independently of VAD, gain and turn-taking. Remove before any PR.
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__ol = {
+    loadModels: (cb?: (p: LoadProgress) => void) => loadModels(cb ?? (() => {})),
+    stt: (a: Float32Array) => stt(a),
+    tts: (t: string) => tts(t),
+    turnComplete: (a: Float32Array, th?: number) => turnComplete(a, th),
+    modelsReady, modelsCached, hasWebGPU, probeWebGPU, turnModelReady,
+  };
+}
+
 export function hasWebGPU(): boolean {
-  return typeof navigator !== "undefined" && "gpu" in navigator;
+  return webgpuOk;
 }
 
 export function modelsReady(): boolean { return ready; }
@@ -92,8 +167,12 @@ export async function removeModel(kind: "whisper" | "kokoro" | "supertonic"): Pr
 
 let loading: Promise<void> | null = null;
 
-export function loadModels(onProgress: (p: LoadProgress) => void): Promise<void> {
-  if (modelsMatchConfig()) return Promise.resolve();
+export async function loadModels(onProgress: (p: LoadProgress) => void): Promise<void> {
+  // Must settle BEFORE any tier/tag is computed: deviceTier() -> hasWebGPU() feeds
+  // readyTag(), sttSize() and modelsMatchConfig(), so probing later would pick the
+  // wrong weights and mis-key the cache flag.
+  await probeWebGPU();
+  if (modelsMatchConfig()) return;
   // In-flight guard: a silent background preload and the start() lazy-load must
   // share ONE worker, not race to spawn two. Late callers join the same promise.
   if (loading) return loading;
@@ -152,7 +231,7 @@ export function loadModels(onProgress: (p: LoadProgress) => void): Promise<void>
       reject(err); // the load promise, if we never became ready
     };
     const tier = deviceTier();
-    console.info(`[live] on-device compute: ${tier === "webgpu" ? "WebGPU (fast)" : "WASM/CPU (slow — no navigator.gpu)"}`);
+    console.info(`[live] on-device compute: ${tier === "webgpu" ? "WebGPU (fast)" : "WASM/CPU (slow — no usable WebGPU adapter)"}`);
     const cfg = loadPipelineConfig();
     w.postMessage({ type: "load", device: tier, whisperSize: sttSize(), ttsEngine: cfg.tts.engine, ttsVoice: cfg.tts.voice });
   });
@@ -165,7 +244,15 @@ export function loadModels(onProgress: (p: LoadProgress) => void): Promise<void>
 // finalize step awaits forever and the whole turn loop deadlocks ("stuck listening").
 // Generous enough not to trip a legitimately slow WASM/CPU transcription of a long
 // utterance; short enough that a real stall self-heals in seconds.
-const CALL_TIMEOUT_MS = 12000;
+// Tier-aware: WebGPU inference is a couple of seconds, WASM/CPU on a weak machine
+// is not. Measured on an AMD Stoney laptop (2 cores): a ~2s utterance transcribes in
+// 7-9s with the machine IDLE, and exceeds 12s inside a live call, where the worker
+// shares those two cores with the VAD, the UI and TTS. The old flat 12s cap therefore
+// rejected every real turn — and because onSpeechEnd's catch was bare, the failure was
+// invisible: the mic indicator moved, the turn was discarded, and the call sat on
+// LISTENING forever. A generous cap costs nothing when inference is fast (it is only a
+// deadlock guard) and is the difference between "works slowly" and "appears broken".
+const CALL_TIMEOUT_MS = () => (hasWebGPU() ? 12000 : 60000);
 // TTS gets a longer leash: a mid-call ENGINE SWITCH lazy-downloads the new
 // engine's weights inside the first tts call (Cache API after that).
 const TTS_TIMEOUT_MS = 120000;
@@ -173,7 +260,7 @@ const TTS_TIMEOUT_MS = 120000;
 function call<T>(msg: any, transfer?: Transferable[]): Promise<T> {
   if (!worker) return Promise.reject(new Error("models not loaded"));
   const id = ++seq;
-  const timeoutMs = msg.type === "tts" ? TTS_TIMEOUT_MS : CALL_TIMEOUT_MS;
+  const timeoutMs = msg.type === "tts" ? TTS_TIMEOUT_MS : CALL_TIMEOUT_MS();
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       if (pending.delete(id)) reject(new Error(`model call "${msg.type}" timed out after ${timeoutMs}ms`));
