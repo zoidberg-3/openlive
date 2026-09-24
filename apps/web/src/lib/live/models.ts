@@ -278,8 +278,13 @@ function call<T>(msg: any, transfer?: Transferable[]): Promise<T> {
 // The in-browser WASM tier stays as the fallback: it has no threads without
 // cross-origin isolation and measured 17-40 s per utterance in-call on a 2-core
 // CPU, against ~2 s native. One toast per session, never a broken call.
-let nativeSttOff = false;      // model not installed / not reachable — stop retrying
+let nativeSttOff = false;      // model not installed — stop retrying for the session
 let nativeSttToasted = false;
+// A transient failure must cost ONE turn, not the session: demoting the whole
+// call to the 20x slower WASM path on a single hiccup is a silent 40s-a-turn
+// regression the user can't see or undo. Give up only on a persistent fault.
+let nativeSttFails = 0;
+const NATIVE_STT_MAX_FAILS = 3;
 async function nativeStt(audio: Float32Array, sampleRate: number): Promise<string | null> {
   if (nativeSttOff) return null;
   try {
@@ -295,16 +300,17 @@ async function nativeStt(audio: Float32Array, sampleRate: number): Promise<strin
     if (res.status === 409) { nativeSttOff = true; return null; }   // model not installed: quietly use WASM
     if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
     const { text } = (await res.json()) as { text: string };
+    nativeSttFails = 0;
     return text;
   } catch (e) {
-    nativeSttOff = true;
-    if (!nativeSttToasted) {
+    if (++nativeSttFails >= NATIVE_STT_MAX_FAILS) nativeSttOff = true;
+    if (!nativeSttToasted && nativeSttOff) {
       nativeSttToasted = true;
       const { toast } = await import("@/lib/toast");
       toast("Fast transcription unavailable — using the slower in-browser engine.");
     }
     const { log } = await import("@/lib/log");
-    log.error("stt", "native transcription failed, falling back to WASM:", e);
+    log.error("stt", `native transcription failed (${nativeSttFails}/${NATIVE_STT_MAX_FAILS}), falling back to WASM for this turn:`, e);
     return null;
   }
 }
