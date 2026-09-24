@@ -108,3 +108,72 @@ benchmarking both under identical load.
 - The wall is **2 cores at loadavg ~9**, not the inference runtime. Note the idle Electron
   **gpu-process burning ~34% CPU for nothing** — worth killing, it is free headroom.
 - After this, **TTS (Kokoro, 28 s) becomes the biggest term.** Promote the stretch goal.
+
+---
+
+## PHASE 1 COMPLETE — 2026-09-25 ~01:30. Both halves now native.
+
+**Committed:** `2346af3` native STT · `88defce` per-turn fallback fix · `2eb3f5b` native TTS.
+
+### Where the time goes now (measured, in-app, 2-core CPU)
+| stage | session start | now |
+|---|---|---|
+| stt+endpoint | 38–40 s | **~2 s** |
+| model (Claude Code) | 20 s | ~6.5 s |
+| tts (time to FIRST sentence) | 28 s | **~2.5 s** |
+| **voice-to-voice** | **86 s** | **~11 s** |
+
+### STT: sherpa-onnx whisper tiny.en fp32, in the agent service
+Chose the agent service over the Electron main process for three reasons that all
+held up: the renderer→`/api/voice/*` seam already existed (cloned-voice TTS uses
+it), `sherpa-onnx-node` was already a declared dep of `services/agent` (so no
+`pnpm install` — and a fresh install is what floated `onnxruntime-web` to 1.27 and
+caused defect #1), and `decodeAsync` runs off the event loop that also drives the
+coding agent. `@huggingface/transformers` is NOT resolvable from `services/agent`.
+
+### TTS: the measurement that killed three plausible options
+Time to the first spoken sentence — the pipeline already chunks by sentence, and
+`perf.firstAudio()` already measures exactly this, so the reported `tts` number
+was never total synthesis:
+| engine | first sentence | verdict |
+|---|---|---|
+| Piper medium, native | **2.1–2.9 s** | chosen |
+| KittenTTS nano, native | 2.2–3.3 s | works, voices rough |
+| Kokoro 82M, browser WASM | 12.4 s | previous default |
+| Supertonic, browser WASM | **21.8 s** | labelled "fastest" — it is NOT here |
+| Piper **high** tier, native | **42 s** | high tier unusable; offer `medium` only |
+| Kokoro 82M, native int8 | 67 s | worse than the browser |
+| ZipVoice cloning, native | 110 s | upstream's comment claims 0.22x realtime |
+
+**Voice cloning is not viable on this class of machine** — ZipVoice measured
+~0.06x realtime against upstream's noted 0.22x. Game-character voices have to
+arrive as pre-trained Piper models, not clones. GLaDOS + HAL 9000 exist as Piper;
+Mass Effect / Halo do not (they get made as RVC, which needs a GPU).
+
+### Also corrected tonight
+- **The 3.17x faster-whisper figure was an idle-machine number.** Re-measured
+  under identical load: 0.93x, i.e. no advantage over ORT-node. Benchmark
+  competing options back-to-back under the SAME load or don't quote the number.
+- **Supertonic crashed the renderer once** (400 MB in-browser; 8 GB RAM free, no
+  OOM kill logged). Second attempt survived but was slow. Not worth chasing.
+- A single native-STT failure used to demote the whole session to the 20x slower
+  WASM path — a silent regression the user can't see. Now 3 strikes, per turn.
+
+### Security note (Lucas asked, 01:20)
+Everything downloaded came from `k2-fsa/sherpa-onnx` releases or
+`huggingface.co/csukuangfj` (the sherpa maintainer) — same trust level as the
+`sherpa-onnx-node` dep the app already had. `.onnx` is protobuf **data**;
+`.pt`/`.pkl`/`.bin`/`.ckpt` are pickles that **execute on load** — never take a
+"voice model" in those formats. Archive path-traversal was *verified* refused by
+GNU tar 1.35 on this machine (`Member name contains '..'`), not assumed.
+
+## PHASE 2 — tidy + upstream (NOW the next job)
+- [ ] Strip `[dbg]` lines + the `window.__ol` bridge (KEEP real error logging —
+      a bare `catch {}` was root cause #2).
+- [ ] Model downloads still land by hand into `data/models/*`. For a PR they need
+      the `/voice/model/download` treatment (progress stream, .part files, no
+      partial installs) and a Settings entry.
+- [ ] `apps/web` still declares `onnxruntime-web "^1.22.0"` — pin it exactly, or
+      defect #1 returns on the next fresh install.
+- [ ] Split into per-defect commits; PR #1 = the five original bug fixes only.
+- [ ] Native STT/TTS = a separate ISSUE with these numbers, not a surprise diff.
