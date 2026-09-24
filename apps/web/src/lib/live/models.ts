@@ -289,9 +289,13 @@ async function nativeStt(audio: Float32Array, sampleRate: number): Promise<strin
   if (nativeSttOff) return null;
   const t0 = performance.now();
   try {
-    // Deadline scaled to the clip (native decodes at ~2x realtime), floor 15 s.
-    // Never unbounded: a wedged service must fall back, not hang the turn.
-    const budget = Math.max(15_000, Math.round((audio.length / sampleRate) * 4000));
+    // Deadline scaled to the clip. The floor must cover a COLD engine load on a
+    // busy machine: measured in-call, native decode is ~0.5x realtime (NOT the
+    // ~2x an idle bench shows), and the first call of a session also pays the
+    // model load. A 15 s floor made the first turn of every call fall back to
+    // the 4x slower WASM path -- the safety net was worse than no net.
+    // Never unbounded, though: a wedged service must fall back, not hang.
+    const budget = Math.max(45_000, Math.round((audio.length / sampleRate) * 8000));
     const res = await fetch(`/api/voice/stt?sr=${sampleRate}`, {
       method: "POST",
       headers: { "content-type": "application/octet-stream" },

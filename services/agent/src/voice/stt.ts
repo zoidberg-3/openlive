@@ -23,7 +23,8 @@ import { log } from "../log.js";
 export const STT_MODEL_DIR = resolve(DATA_DIR, "models", "whisper");
 
 const MODEL_FILES = ["tiny.en-encoder.onnx", "tiny.en-decoder.onnx", "tiny.en-tokens.txt"];
-const IDLE_UNLOAD_MS = 5 * 60_000; // the loaded recognizer holds ~200 MB
+const IDLE_UNLOAD_MS = 30 * 60_000; // ~200 MB resident; a reload mid-call costs ~7 s,
+// which is worse than holding it -- a voice call can easily pause 5 min mid-thought.
 
 export function sttInstalled(): boolean {
   return MODEL_FILES.every((f) => existsSync(join(STT_MODEL_DIR, f)));
@@ -56,7 +57,8 @@ function loadRecognizer(): Recognizer {
         tailPaddings: -1,
       },
       tokens: join(STT_MODEL_DIR, "tiny.en-tokens.txt"),
-      numThreads: 2, // measured faster than 1 on 2 cores; decode is off-loop anyway
+      numThreads: 1, // STT and TTS share this process AND the CPU with the coding
+      // agent: 2 threads each oversubscribed a 2-core box and made both slower.
       debug: 0,
       provider: "cpu",
     },

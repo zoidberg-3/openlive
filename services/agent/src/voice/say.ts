@@ -21,7 +21,7 @@ import { log } from "../log.js";
 // choice, not a replacement — the engine stays user-selectable in Settings.
 
 const MODELS_DIR = resolve(DATA_DIR, "models");
-const IDLE_UNLOAD_MS = 5 * 60_000;
+const IDLE_UNLOAD_MS = 30 * 60_000; // a reload mid-call costs ~7 s; holding is cheaper
 
 // Voice id -> model directory under data/models. Piper/VITS voices are one
 // single-speaker model each; KittenTTS is one model with 8 speaker rows.
@@ -89,7 +89,9 @@ function loadEngine(voice: string): Tts {
   if (!d || !onnx) throw new Error(`voice "${voice}" not installed`);
   sherpa ??= createRequire(import.meta.url)("sherpa-onnx-node") as Sherpa;
   const t = Date.now();
-  const common = { numThreads: 2, debug: 0, provider: "cpu" };
+  // 1 thread, not 2: STT and TTS live in the same process and share the CPU
+  // with the coding agent -- asking for 2 each oversubscribed a 2-core box.
+  const common = { numThreads: 1, debug: 0, provider: "cpu" };
   const model = d.kind === "kitten"
     ? { kitten: { model: join(d.path, onnx), voices: join(d.path, "voices.bin"), tokens: join(d.path, "tokens.txt"), dataDir: join(d.path, "espeak-ng-data") }, ...common }
     : { vits: { model: join(d.path, onnx), tokens: join(d.path, "tokens.txt"), dataDir: join(d.path, "espeak-ng-data") }, ...common };
