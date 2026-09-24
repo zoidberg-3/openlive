@@ -177,3 +177,47 @@ GNU tar 1.35 on this machine (`Member name contains '..'`), not assumed.
       defect #1 returns on the next fresh install.
 - [ ] Split into per-defect commits; PR #1 = the five original bug fixes only.
 - [ ] Native STT/TTS = a separate ISSUE with these numbers, not a surprise diff.
+
+---
+
+## ▶ RESUME HERE — 2026-09-25 ~02:20, Lucas going to bed, will test on waking.
+
+**State: everything committed and typechecking clean. Nothing half-finished.**
+Last code commit `da24172`. The app + dev stack were left RUNNING; the laptop is
+being suspended, so they should survive resume.
+
+### If the app isn't running after resume
+```
+cd ~/src/openlive && npx -y pnpm@11.5.2 desktop:dev
+```
+Then: New -> pick a folder -> talk. Config is already set to the native fast path
+(`localStorage openlive-pipeline-v1` -> `tts.engine="fast"`,
+`voice="northern_english_male"`). Watch a live call over CDP on
+`--remote-debugging-port=9333` (scratchpad has `cdp-watch-long.mjs`).
+
+### The one honest number to beat
+**Real in-call, NOT a bench:** turn 1 **77.7s** (a 15s deadline of mine fired and
+dumped the turn onto the WASM path), turn 2 **31.6s** — against 86s all-WASM.
+After `da24172`'s tuning, EXPECT ~20-25s on turn 1 and **~15-20s** settled.
+**Do not quote the ~11s figure — it was an idle-machine measurement.**
+
+### The lesson relearned the hard way, twice in one night
+Idle benchmarks lie by 3-4x on this machine. In-call, native STT decode is
+**~0.5x realtime**, not the ~2x an idle bench shows (7.5-10.1s for 3-5s of audio).
+I quoted the bench number as a promise, then shipped a 15s deadline based on it,
+which made the first turn of every call WORSE than doing nothing. Any latency
+figure not taken during a live call is a guess.
+
+### Next, in order
+1. **Lucas tests on waking** — collect turn 1/2/3 numbers, confirm tuning helped.
+2. If TTS is still the biggest term: 18.3s in-call vs 2.5s on the bench. Check
+   whether STT and TTS overlap and starve each other (same process, now 1 thread
+   each) and whether the first `say` of a call still pays an engine load.
+3. THEN Phase 2 (strip `[dbg]` + `window.__ol`, per-defect commits, two PRs).
+
+### Voices (all installed; `GET /voice/say/voices`)
+`northern_english_male` (Lucas's default — the one he asked me to choose for
+myself), `southern_english_female` (for Hermes, who asked for British female),
+`alan`, `alba`, `jenny`, `lessac`, `ryan`, **`glados`**, `kitten`.
+Piper **high** tier is unusable here (42s) — `medium` only. Cloning is dead on
+this hardware (ZipVoice ~0.06x realtime, vs upstream's noted 0.22x).
