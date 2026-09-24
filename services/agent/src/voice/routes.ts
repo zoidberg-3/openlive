@@ -10,6 +10,7 @@ import { listVoiceProfiles, createVoiceProfile, deleteVoiceProfile, renameVoiceP
 import { modelInstalled, modelDiskBytes, synthesize, unloadEngine, VOICE_MODEL_DIR, VOICE_PROFILE_DIR } from "./engine.js";
 import { log } from "../log.js";
 import { sttInstalled, transcribe } from "./stt.js";
+import { installedVoices, say, sayInstalled } from "./say.js";
 
 // Voice Studio REST surface, mounted at /voice (behind the same shared-secret
 // gate as everything else; the web app reaches it through a same-origin Next
@@ -193,10 +194,38 @@ voiceRoutes.post("/stt", async (c) => {
   try {
     const t = Date.now();
     const text = await transcribe(samples, sampleRate);
-    log.debug("voice", `stt ${(samples.length / sampleRate).toFixed(1)}s audio -> ${Date.now() - t}ms`);
-    return c.json({ text });
+    const ms = Date.now() - t;
+    const secs = Number((samples.length / sampleRate).toFixed(2));
+    log.debug("voice", `stt ${secs}s audio -> ${ms}ms`);
+    // Timings ride along so the caller can separate decode cost from clip length
+    // and transport: a slow turn is otherwise indistinguishable from a long one.
+    return c.json({ text, ms, secs });
   } catch (e) {
     log.error("voice", "stt:", e);
     return c.json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });
+
+// Fast local synthesis (KittenTTS). Same Float32 PCM + x-sample-rate response
+// shape as /tts, so the renderer consumes both identically.
+voiceRoutes.post("/say", async (c) => {
+  if (!sayInstalled()) return c.json({ error: "model-not-installed" }, 409);
+  const body = await c.req.json().catch(() => null) as { text?: string; voice?: string; speed?: number } | null;
+  const text = body?.text?.trim();
+  if (!text) return c.json({ error: "text required" }, 400);
+  const speed = Math.min(2, Math.max(0.5, Number(body?.speed) || 1));
+  try {
+    const t = Date.now();
+    const audio = await say(text, body?.voice || undefined, speed);
+    log.debug("voice", `say ${text.length} chars -> ${Date.now() - t}ms for ${(audio.samples.length / audio.sampleRate).toFixed(1)}s`);
+    return new Response(Buffer.from(audio.samples.buffer, audio.samples.byteOffset, audio.samples.byteLength), {
+      headers: { "Content-Type": "application/octet-stream", "x-sample-rate": String(audio.sampleRate) },
+    });
+  } catch (e) {
+    log.error("voice", "say:", e);
+    return c.json({ error: String((e as Error)?.message ?? e) }, 500);
+  }
+});
+
+// Which fast voices are actually on disk — the client builds its picker from this.
+voiceRoutes.get("/say/voices", (c) => c.json({ voices: installedVoices() }));

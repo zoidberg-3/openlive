@@ -1,0 +1,125 @@
+import { existsSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
+import { DATA_DIR } from "@openlive/db";
+import { log } from "../log.js";
+
+// Fast local speech synthesis: KittenTTS nano through the sherpa-onnx Node
+// addon — the same native runtime as STT and the ZipVoice cloning engine, so
+// again no new dependency.
+//
+// Why a small model: measured on a 2-core CPU, time to the FIRST spoken
+// sentence (which is what a caller actually waits through, since the pipeline
+// already synthesizes sentence by sentence):
+//   KittenTTS nano fp32, native   ~3-5 s   <- this
+//   Kokoro 82M, in-browser WASM   ~12.5 s  (the current default)
+//   Kokoro 82M, native int8        67 s    tried, far worse, rejected
+//   ZipVoice cloning, native      110 s    upstream's own note claims 0.22x
+//                                          realtime; on this machine it is
+//                                          ~0.06x, so cloning is not viable here
+// Nano's voices are noticeably rougher than Kokoro's. It is offered as a
+// choice, not a replacement — the engine stays user-selectable in Settings.
+
+const MODELS_DIR = resolve(DATA_DIR, "models");
+const IDLE_UNLOAD_MS = 5 * 60_000;
+
+// Voice id -> model directory under data/models. Piper/VITS voices are one
+// single-speaker model each; KittenTTS is one model with 8 speaker rows.
+// Measured on this machine, "Yeah, I'm here.": piper-medium ~2.1-2.9s,
+// kitten ~2.2-3.3s, and piper-HIGH ~42s — the high tier is unusable here,
+// so only `medium` voices are offered.
+const VOICES: Record<string, { dir: string; kind: "vits" | "kitten"; sid?: number }> = {
+  "northern_english_male": { dir: "piper-en_GB-northern_english_male-medium", kind: "vits" },
+  "southern_english_female": { dir: "piper-en_GB-southern_english_female-medium", kind: "vits" },
+  "alan": { dir: "piper-en_GB-alan-medium", kind: "vits" },
+  "alba": { dir: "piper-en_GB-alba-medium", kind: "vits" },
+  "lessac": { dir: "piper-en_US-lessac-medium", kind: "vits" },
+  "jenny": { dir: "piper-en_GB-jenny_dioco-medium", kind: "vits" },
+  "ryan": { dir: "piper-en_US-ryan-medium", kind: "vits" },
+  "glados": { dir: "piper-glados", kind: "vits" },
+  "kitten": { dir: "kitten", kind: "kitten", sid: 0 },
+};
+export const SAY_VOICE_IDS = Object.keys(VOICES);
+const DEFAULT_VOICE = "northern_english_male";
+
+function dirOf(voice: string): { path: string; kind: "vits" | "kitten"; sid: number } | null {
+  const v = VOICES[voice] ?? VOICES[DEFAULT_VOICE];
+  if (!v) return null;
+  return { path: join(MODELS_DIR, v.dir), kind: v.kind, sid: v.sid ?? 0 };
+}
+
+function onnxIn(dir: string): string | null {
+  try { return readdirSync(dir).find((f) => f.endsWith(".onnx")) ?? null; } catch { return null; }
+}
+
+/** Any installed voice at all? */
+export function sayInstalled(): boolean {
+  return SAY_VOICE_IDS.some((v) => voiceInstalled(v));
+}
+
+export function voiceInstalled(voice: string): boolean {
+  const d = dirOf(voice);
+  if (!d) return false;
+  return !!onnxIn(d.path) && existsSync(join(d.path, "tokens.txt")) && existsSync(join(d.path, "espeak-ng-data"));
+}
+
+/** Installed voice ids, for the client's voice picker. */
+export function installedVoices(): string[] {
+  return SAY_VOICE_IDS.filter(voiceInstalled);
+}
+
+type Tts = {
+  generateAsync(req: unknown): Promise<{ samples: Float32Array; sampleRate: number }>;
+  sampleRate: number;
+  numSpeakers: number;
+};
+type Sherpa = { OfflineTts: new (cfg: unknown) => Tts };
+
+let sherpa: Sherpa | null = null;
+// One loaded engine at a time: holding several voices resident would cost more
+// RAM than a 2-core machine should spend. Switching voices reloads (~7s once).
+let engine: { voice: string; tts: Tts } | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+let queue: Promise<unknown> = Promise.resolve(); // own queue — never shared with STT or cloning
+
+function loadEngine(voice: string): Tts {
+  if (engine?.voice === voice) return engine.tts;
+  const d = dirOf(voice);
+  const onnx = d && onnxIn(d.path);
+  if (!d || !onnx) throw new Error(`voice "${voice}" not installed`);
+  sherpa ??= createRequire(import.meta.url)("sherpa-onnx-node") as Sherpa;
+  const t = Date.now();
+  const common = { numThreads: 2, debug: 0, provider: "cpu" };
+  const model = d.kind === "kitten"
+    ? { kitten: { model: join(d.path, onnx), voices: join(d.path, "voices.bin"), tokens: join(d.path, "tokens.txt"), dataDir: join(d.path, "espeak-ng-data") }, ...common }
+    : { vits: { model: join(d.path, onnx), tokens: join(d.path, "tokens.txt"), dataDir: join(d.path, "espeak-ng-data") }, ...common };
+  const tts = new sherpa.OfflineTts({
+    model,
+    maxNumSentences: 1, // the caller already chunks by sentence; keep latency per chunk low
+  });
+  engine = { voice, tts };
+  log.debug("voice", `say engine "${voice}" loaded in ${Date.now() - t}ms`);
+  return tts;
+}
+
+function touchIdle(): void {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { engine = null; log.debug("voice", "say engine unloaded (idle)"); }, IDLE_UNLOAD_MS);
+  idleTimer.unref?.();
+}
+
+/** Synthesize `text` with voice `sid`. Serialized on one engine handle. */
+export function say(text: string, voice = DEFAULT_VOICE, speed = 1): Promise<{ samples: Float32Array; sampleRate: number }> {
+  const run = queue.then(async () => {
+    const tts = loadEngine(voice);
+    const sid = dirOf(voice)?.sid ?? 0;
+    // The lexicon drops OOV punctuation with a warning — same clean-up the
+    // cloning engine does.
+    const clean = text.replace(/[—–]/g, ", ").trim();
+    const audio = await tts.generateAsync({ text: clean, sid, speed });
+    touchIdle();
+    return audio;
+  });
+  queue = run.catch(() => { /* a failed line must not wedge the queue */ });
+  return run;
+}

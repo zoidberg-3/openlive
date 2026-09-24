@@ -8,8 +8,8 @@
 export type WhisperSize = "tiny" | "base" | "small" | "large-v3-turbo";
 export const WHISPER_SIZE_IDS: readonly WhisperSize[] = ["tiny", "base", "small", "large-v3-turbo"];
 export type TurnEngine = "smart-turn" | "silence";
-export type TtsEngine = "kokoro" | "supertonic" | "clone";
-export const TTS_ENGINE_IDS: readonly TtsEngine[] = ["kokoro", "supertonic", "clone"];
+export type TtsEngine = "kokoro" | "supertonic" | "fast" | "clone";
+export const TTS_ENGINE_IDS: readonly TtsEngine[] = ["kokoro", "supertonic", "fast", "clone"];
 
 export interface PipelineConfig {
   stt: { whisperSize: WhisperSize };                        // Whisper.en model size (applies on reload)
@@ -86,9 +86,26 @@ export const SUPERTONIC_VOICES: VoiceOption[] = (["M1", "M2", "M3", "M4", "M5", 
   gender: id[0] === "M" ? "Male" : "Female",
 }));
 
+// KittenTTS nano runs NATIVELY in the local agent service, not in the browser:
+// on a low-core CPU that is the difference between ~3-5 s and ~12.5 s to the
+// first spoken sentence. The voices are rougher than Kokoro's — this is the
+// speed choice, offered alongside rather than instead of it.
+export const KITTEN_VOICES: VoiceOption[] = [
+  { id: "northern_english_male", name: "Northern English male", accent: "British", gender: "Male" },
+  { id: "southern_english_female", name: "Southern English female", accent: "British", gender: "Female" },
+  { id: "alan", name: "Alan", accent: "British", gender: "Male" },
+  { id: "alba", name: "Alba (Scottish)", accent: "British", gender: "Female" },
+  { id: "jenny", name: "Jenny", accent: "British", gender: "Female" },
+  { id: "lessac", name: "Lessac", accent: "American", gender: "Male" },
+  { id: "ryan", name: "Ryan", accent: "American", gender: "Male" },
+  { id: "glados", name: "GLaDOS", accent: "American", gender: "Female" },
+  { id: "kitten", name: "Kitten nano (roughest, smallest)", accent: "American", gender: "Male" },
+];
+
 export const TTS_ENGINES: { id: TtsEngine; name: string; voices: VoiceOption[]; defaultVoice: string }[] = [
   { id: "kokoro", name: "Kokoro — natural, 28 voices (~82 MB)", voices: KOKORO_VOICES, defaultVoice: "af_heart" },
   { id: "supertonic", name: "Supertonic — fastest, 10 voices (~400 MB)", voices: SUPERTONIC_VOICES, defaultVoice: "M1" },
+  { id: "fast", name: "Fast — native, lowest latency on low-power CPUs (~20 MB per voice)", voices: KITTEN_VOICES, defaultVoice: "northern_english_male" },
   // Cloned voices (Voice Studio): synthesis runs in the local agent service
   // (ZipVoice via sherpa-onnx); `voice` holds a profile id, and the runtime
   // falls back to Kokoro if the model/profile is missing.
