@@ -75,3 +75,36 @@ dissolve it; if not, cap the merged buffer length.
 - **Test hypotheses under REAL conditions.** I retracted the correct timeout theory
   because I benchmarked it on an idle machine.
 - **A bare `catch {}` is a bug.** Two nights of "nothing happens" was one swallowed error.
+
+---
+
+## PHASE 1 RESULTS (measured 2026-09-25 ~00:0x, machine loadavg ~9 on 2 cores)
+
+**Step 1 ✅ `onnxruntime-node` loads in the Electron MAIN process.** Real main process
+(`process.type = browser`), Electron 43.1.1 / node 24.18.0 / **ABI 148** — the prebuilt
+binding is N-API (`bin/napi-v*/linux/x64/onnxruntime_binding.node`) so the Node-22-vs-24
+ABI gap is a non-issue. `require()` took 43 ms. Backends: cpu + webgpu bundled.
+`@huggingface/transformers@4.2.0` ships `dist/transformers.node.mjs` and imports clean in
+main; `env.backends = ["onnx"]`. **It is already a dependency — nothing new to add.**
+
+**Step 3 ✅ It transcribes.** `onnx-community/whisper-tiny.en`, 4.0 s clip:
+
+| runtime (same 4 s clip, same load) | model load | warm run | xRT |
+|---|---|---|---|
+| **ORT-node q8, Electron main** | 14.3 s | **3.6–4.1 s** | **~1.0x** |
+| ORT-node fp32, Electron main | 40.3 s | 4.7–5.5 s | ~0.78x |
+| faster-whisper / CTranslate2 int8 (python) | 22.1 s | 4.3 s | ~0.93x |
+| onnxruntime-**web** WASM (current, in-call) | — | **17–40 s** | ~0.1x |
+
+**⚠ The 3.17x faster-whisper figure was an IDLE-machine number.** Re-measured under real
+load it is 0.93x — i.e. **CTranslate2 has no speed advantage over ORT-node here.** Same
+mistake the method note at the bottom of this file warns about; caught it this time by
+benchmarking both under identical load.
+
+**Conclusions:**
+- Use **ORT-node q8 in the Electron main process**. No Python sidecar, no new dependency.
+- q8 beats fp32 on native (opposite of the WASM tier, where q8 won't load at all).
+- Expected win: STT **17–40 s → ~2 s** for a typical 2 s utterance (~10–20x).
+- The wall is **2 cores at loadavg ~9**, not the inference runtime. Note the idle Electron
+  **gpu-process burning ~34% CPU for nothing** — worth killing, it is free headroom.
+- After this, **TTS (Kokoro, 28 s) becomes the biggest term.** Promote the stretch goal.
