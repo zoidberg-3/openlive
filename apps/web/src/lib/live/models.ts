@@ -273,8 +273,46 @@ function call<T>(msg: any, transfer?: Transferable[]): Promise<T> {
   });
 }
 
+// Transcription prefers the LOCAL agent service (Whisper via sherpa-onnx), the
+// same place cloned-voice synthesis runs, reached through the /api/voice proxy.
+// The in-browser WASM tier stays as the fallback: it has no threads without
+// cross-origin isolation and measured 17-40 s per utterance in-call on a 2-core
+// CPU, against ~2 s native. One toast per session, never a broken call.
+let nativeSttOff = false;      // model not installed / not reachable — stop retrying
+let nativeSttToasted = false;
+async function nativeStt(audio: Float32Array, sampleRate: number): Promise<string | null> {
+  if (nativeSttOff) return null;
+  try {
+    // Deadline scaled to the clip (native decodes at ~2x realtime), floor 15 s.
+    // Never unbounded: a wedged service must fall back, not hang the turn.
+    const budget = Math.max(15_000, Math.round((audio.length / sampleRate) * 4000));
+    const res = await fetch(`/api/voice/stt?sr=${sampleRate}`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer,
+      signal: AbortSignal.timeout(budget),
+    });
+    if (res.status === 409) { nativeSttOff = true; return null; }   // model not installed: quietly use WASM
+    if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
+    const { text } = (await res.json()) as { text: string };
+    return text;
+  } catch (e) {
+    nativeSttOff = true;
+    if (!nativeSttToasted) {
+      nativeSttToasted = true;
+      const { toast } = await import("@/lib/toast");
+      toast("Fast transcription unavailable — using the slower in-browser engine.");
+    }
+    const { log } = await import("@/lib/log");
+    log.error("stt", "native transcription failed, falling back to WASM:", e);
+    return null;
+  }
+}
+
 /** Transcribe a 16 kHz mono utterance → text. */
-export async function stt(audio: Float32Array): Promise<string> {
+export async function stt(audio: Float32Array, sampleRate = 16000): Promise<string> {
+  const native = await nativeStt(audio, sampleRate);
+  if (native !== null) return native;
   const m = await call<{ text: string }>({ type: "stt", audio });
   return m.text;
 }

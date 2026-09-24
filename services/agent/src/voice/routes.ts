@@ -9,6 +9,7 @@ import unbzip2 from "unbzip2-stream";
 import { listVoiceProfiles, createVoiceProfile, deleteVoiceProfile, renameVoiceProfile } from "@openlive/db";
 import { modelInstalled, modelDiskBytes, synthesize, unloadEngine, VOICE_MODEL_DIR, VOICE_PROFILE_DIR } from "./engine.js";
 import { log } from "../log.js";
+import { sttInstalled, transcribe } from "./stt.js";
 
 // Voice Studio REST surface, mounted at /voice (behind the same shared-secret
 // gate as everything else; the web app reaches it through a same-origin Next
@@ -174,6 +175,28 @@ voiceRoutes.post("/tts", async (c) => {
     });
   } catch (e) {
     log.error("voice", "tts:", e);
+    return c.json({ error: String((e as Error)?.message ?? e) }, 500);
+  }
+});
+
+// ── transcription ────────────────────────────────────────────────────────────
+// Raw Float32 mono PCM in (the renderer already holds exactly that), text out.
+// `?sr=` carries the rate because the same-origin proxy only forwards the query
+// string and content-type, not arbitrary request headers.
+voiceRoutes.post("/stt", async (c) => {
+  if (!sttInstalled()) return c.json({ error: "model-not-installed" }, 409);
+  const sampleRate = Number(c.req.query("sr")) || 16000;
+  const buf = await c.req.arrayBuffer();
+  if (buf.byteLength < 4) return c.json({ error: "audio required" }, 400);
+  // Copy rather than view: the body may land on a non-4-byte-aligned offset.
+  const samples = new Float32Array(buf.slice(0, buf.byteLength - (buf.byteLength % 4)));
+  try {
+    const t = Date.now();
+    const text = await transcribe(samples, sampleRate);
+    log.debug("voice", `stt ${(samples.length / sampleRate).toFixed(1)}s audio -> ${Date.now() - t}ms`);
+    return c.json({ text });
+  } catch (e) {
+    log.error("voice", "stt:", e);
     return c.json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });
