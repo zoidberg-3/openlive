@@ -226,3 +226,22 @@ myself), `southern_english_female` (for Hermes, who asked for British female),
 `alan`, `alba`, `jenny`, `lessac`, `ryan`, **`glados`**, `kitten`.
 Piper **high** tier is unusable here (42s) — `medium` only. Cloning is dead on
 this hardware (ZipVoice ~0.06x realtime, vs upstream's noted 0.22x).
+
+---
+
+## ⚠ THE DEV SERVER SERVES THE CHECKED-OUT BRANCH
+Burned 2026-09-25: built the PR on a clean branch (`fix/cpu-only-voice-pipeline`,
+five bug fixes only) and left the working tree there. The running app silently
+became the PR build — no native speech, a 460 MB browser-model re-download, and
+a HARD FAILURE because the saved config's `tts.engine: "fast"` does not exist on
+that branch (`engineOf()` asserts non-null), so the pre-call screen died with no
+start button. Lucas spent three attempts and five minutes debugging my
+housekeeping while I theorised about ACP auth.
+
+**Before asking him to test anything: `git branch --show-current` must be
+`fix/webgpu-adapter-probe`, and restart the stack after any checkout.**
+The tell in the screenshot was "Downloading on-device AI… 460 MB" — impossible
+when the native path is live. Read the evidence in front of you first.
+
+Also: settings written by the feature branch are not valid on the PR branch.
+Switching branches needs the stored `tts.engine` reset too, or the UI breaks.
