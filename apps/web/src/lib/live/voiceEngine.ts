@@ -39,7 +39,9 @@ function rmsOf(a: Float32Array): number { let s = 0; for (let i = 0; i < a.lengt
 export class VoiceEngine {
   private vad: MicVAD | null = null;
   private player: AudioPlayer;
-  private chunker = new SentenceChunker();
+  // 40, not the default 90: synthesis on this path runs below realtime, so waiting
+  // for a whole opening sentence is measured dead air (see SentenceChunker).
+  private chunker = new SentenceChunker(40);
   private phase: EnginePhase = "idle";
 
   private pending: Float32Array | null = null;   // held mid-thought utterance

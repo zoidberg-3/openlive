@@ -81,6 +81,15 @@ export function stripMarkdown(s: string): string {
 // whole reply is generated — the difference between "talks as it thinks" and a
 // long silence then a wall of speech.
 export class SentenceChunker {
+  // How far ahead to look for the end of the opening sentence before deciding to
+  // speak it whole rather than fast-starting on a clause. It is really a TIME
+  // budget wearing a character count: synthesis that runs below realtime turns
+  // those characters into dead air before the first word. Measured here, native
+  // CPU synthesis at ~0.6x realtime made the default 90 chars cost ~12 s (tts
+  // median 9 s, p95 17.9 s); ~40 suits a machine that slow. Default keeps the
+  // original behaviour for anyone whose synthesis is realtime or better.
+  constructor(private readonly wholeFirstSentenceChars = 90) {}
+
   private buf = "";      // text after the last completed sentence
   private ready = "";    // completed sentences not yet long enough to speak
   private started = false; // has the first speakable chunk of THIS turn gone out?
@@ -139,7 +148,7 @@ export class SentenceChunker {
     if (s.trim().length < FIRST_TTS_CHARS) return null;
     const clause = /^([\s\S]{12,}?[,;:—–])\s/.exec(s);
     if (clause) { this.buf = s.slice(clause[0].length); return clause[1]!.trim(); }
-    if (/[.!?](\s|$)/.test(s.slice(0, 90))) return null; // a full sentence ends soon — don't chop it
+    if (/[.!?](\s|$)/.test(s.slice(0, this.wholeFirstSentenceChars))) return null; // a full sentence ends soon — don't chop it
     const window = s.slice(0, 48);
     const sp = window.lastIndexOf(" ");
     if (sp < FIRST_TTS_CHARS) return null;
