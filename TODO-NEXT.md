@@ -183,10 +183,15 @@ GNU tar 1.35 on this machine (`Member name contains '..'`), not assumed.
 ## ▶ RESUME HERE — 2026-09-25 ~02:20, Lucas going to bed, will test on waking.
 
 **State: everything committed and typechecking clean. Nothing half-finished.**
-Last code commit `da24172`. The app + dev stack were left RUNNING; the laptop is
-being suspended, so they should survive resume.
+Last code commit `da24172` (docs `c2e22df`).
 
-### If the app isn't running after resume
+### ⚠ THE DEV STACK IS DOWN — start it first thing
+It exited on suspend (`SIGTERM` to the `web` child -> `concurrently -k
+--kill-others` tore down electron + agent with it). It does NOT survive suspend,
+and it will not survive the Claude Code session ending either, since it was
+launched from a session-owned shell. Expect to start it by hand every time.
+
+### Start the app
 ```
 cd ~/src/openlive && npx -y pnpm@11.5.2 desktop:dev
 ```
