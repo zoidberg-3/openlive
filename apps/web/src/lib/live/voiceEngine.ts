@@ -217,9 +217,6 @@ export class VoiceEngine {
   }
 
   private async onSpeechEnd(audio: Float32Array) {
-    // TEMP DEBUG (2026-09-24): the gates below return SILENTLY, so a dropped turn looks
-    // identical to "the VAD never fired". Log the numbers that decide it.
-    try { console.info(`[dbg] onSpeechEnd len=${audio.length} rms=${rmsOf(audio).toFixed(4)} gate=${this.gate().toFixed(4)} finalizing=${this.finalizing} ptt=${this.ptt}`); } catch {}
     // A segment ended while the previous one is still finalizing (STT + turn detection
     // take real time on CPU/WASM). DON'T drop it — defer and re-process below, or the
     // user's words vanish.
@@ -244,7 +241,6 @@ export class VoiceEngine {
         useTurnModel ? turnComplete(combined, turnCfg.threshold) : Promise.resolve(true),
       ]);
       const sttEndpointMs = performance.now() - perf0;
-      try { console.info(`[dbg] stt ${Math.round(sttEndpointMs)}ms text=${JSON.stringify((text||'').slice(0,80))} complete=${modelComplete} useTurn=${useTurnModel}`); } catch {}
       if (this.ptt) { this.pending = combined; if (!isJunk(text)) this.h.onPartial(text); this.setPhase("idle"); return; }
       // Drop empties and Whisper's silence-hallucinations so background noise and
       // dead air never fire a turn.
@@ -270,9 +266,11 @@ export class VoiceEngine {
       perf.turnCommitted(sttEndpointMs);
       this.h.onUserText(text);
       } catch (err) {
-        // TEMP DEBUG (2026-09-24): this catch was BARE — every STT/turn failure was
-        // discarded, so a broken pipeline looked identical to "nothing was said".
-        try { console.error(`[dbg] onSpeechEnd FAILED after ${Math.round(performance.now() - perf0)}ms:`, (err as Error)?.message ?? err); } catch {}
+        // This catch used to be bare: every transcription / end-of-turn failure was
+        // discarded, so a broken pipeline was indistinguishable from "nothing was
+        // said" — which is how a dead pipeline can go unnoticed for days. Always
+        // surface it.
+        log.error("voice", `turn finalize failed after ${Math.round(performance.now() - perf0)}ms:`, (err as Error)?.message ?? err);
       // A stalled/failed inference (now time-limited in models.call) must not strand
       // the turn loop — recover to idle and clear the frozen partial caption.
       this.pending = null; this.h.onPartial(""); this.setPhase("idle");

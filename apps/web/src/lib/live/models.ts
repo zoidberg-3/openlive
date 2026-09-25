@@ -91,19 +91,6 @@ export function probeWebGPU(): Promise<boolean> {
 // value. Guarded for SSR, where there is no navigator.
 if (typeof navigator !== "undefined") void probeWebGPU();
 
-// TEMP DEBUG BRIDGE (2026-09-24): expose the inference facade on window so the
-// pipeline can be exercised directly from DevTools/CDP, without driving the UI or
-// needing a working microphone. Lets us answer "does STT work at all here?"
-// independently of VAD, gain and turn-taking. Remove before any PR.
-if (typeof window !== "undefined") {
-  (window as unknown as Record<string, unknown>).__ol = {
-    loadModels: (cb?: (p: LoadProgress) => void) => loadModels(cb ?? (() => {})),
-    stt: (a: Float32Array) => stt(a),
-    tts: (t: string, o?: { engine?: string; voice?: string; speed?: number }) => tts(t, o),
-    turnComplete: (a: Float32Array, th?: number) => turnComplete(a, th),
-    modelsReady, modelsCached, hasWebGPU, probeWebGPU, turnModelReady,
-  };
-}
 
 export function hasWebGPU(): boolean {
   return webgpuOk;
@@ -306,7 +293,6 @@ async function nativeStt(audio: Float32Array, sampleRate: number): Promise<strin
     if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
     const { text, ms, secs } = (await res.json()) as { text: string; ms?: number; secs?: number };
     nativeSttFails = 0;
-    try { console.info(`[dbg] native stt: ${secs}s audio, decode ${ms}ms, round-trip ${Math.round(performance.now() - t0)}ms`); } catch { /* no console */ }
     return text;
   } catch (e) {
     if (++nativeSttFails >= NATIVE_STT_MAX_FAILS) nativeSttOff = true;
