@@ -245,3 +245,51 @@ when the native path is live. Read the evidence in front of you first.
 
 Also: settings written by the feature branch are not valid on the PR branch.
 Switching branches needs the stored `tts.engine` reset too, or the UI breaks.
+
+---
+
+## ▶ RESUME HERE — 2026-09-25 ~15:20, Lucas back after IRL jobs.
+Agreed order: **small jobs first, then the large one.**
+
+### 1. Model picker for agents using the standard ACP shape (~40 lines)
+`applyConfig()` only reads a `configOptions` select with `category:"model"` (the
+newer shape Claude Code uses). Hermes returns the STANDARD shape on `session/new`:
+`result.models = { availableModels, currentModelId }`, and implements
+`session/set_model`. Verified live against `hermes acp`:
+  currentModelId : custom:~x-ai/grok-latest   (his daily driver is GROK, not 405B)
+  availableModels: **1021**
+  session/set_model -> nousresearch/hermes-4-405b : **OK**
+Fix = read that shape too and route `setModel()` to `session/set_model` when the
+config-option id is absent. Not Hermes-specific: any agent on the standard shape
+is invisible to the picker today. → upstream PR #2.
+
+### 2. Session transition — resume ANY session in the folder (~similar size)
+OpenLive's Resume list is built from its own DB (`listChats()`), so CLI-made
+sessions never appear. But BOTH agents advertise `sessionCapabilities.list`, and
+Claude Code's `session/list` returned all 8 of his voice-test sessions with
+titles + timestamps. So the protocol already supports it; the UI just doesn't ask.
+**Don't hack a UUID into `acpSession:<chatId>` — that was my first plan and it is
+strictly worse than the real feature.** → upstream PR #3.
+
+### 3. Transcribe-while-talking (the big one)
+Design work, unknowns, second-order effects on turn-taking. Use
+`superpowers:brainstorming` FIRST, then TDD for the merge logic (it is pure:
+segments in, text out — testable without a microphone, which matters because
+every feedback loop so far has been "Lucas talks and reports vibes").
+NOT parallel agents / worktrees: one app, one mic, so verification cannot be
+parallel and untested branches are exactly where our bugs came from.
+
+### Hermes by voice — DONE, needed no code
+`hermes acp` on the patched 0.21.4 works: handshake OK, `loadSession`, `fork`,
+`list`, `resume`, and `image:true` (so camera/screen-share works with her too).
+Folder `/home/lc/hermes-voice` (a PERMISSION BOUNDARY — see its README).
+Measured 5 turns: voice-to-voice p50 **24.5s**, model p50 5.0s (Grok).
+⚠ She takes ~19s to return `session/new` (Claude Code ~2s) — that pause is normal.
+⚠ Daily profile → Mnemosyne ingests voice sessions, transcription errors included.
+⚠ NEVER press Install/Update/Uninstall on OpenLive's Hermes card.
+⚠ 405B via the GUI dropdown would be the DAILY profile — no lab_405b patches, so
+not a valid data point for the research programme.
+
+### Shipped today
+PR  https://github.com/katipally/openlive/pull/17  — the five silent defects
+Issue https://github.com/katipally/openlive/issues/18 — native speech measurements
