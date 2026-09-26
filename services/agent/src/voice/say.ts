@@ -87,12 +87,17 @@ type Sherpa = { OfflineTts: new (cfg: unknown) => Tts };
 let sherpa: Sherpa | null = null;
 // One loaded engine at a time: holding several voices resident would cost more
 // RAM than a 2-core machine should spend. Switching voices reloads (~7s once).
-let engine: { voice: string; tts: Tts } | null = null;
+export type Tuning = { noiseScale?: number; noiseScaleW?: number; silenceScale?: number; maxNumSentences?: number };
+const tuneKey = (t?: Tuning) => `${t?.noiseScale ?? ""}|${t?.noiseScaleW ?? ""}|${t?.silenceScale ?? ""}|${t?.maxNumSentences ?? ""}`;
+// Tuning is CONSTRUCTOR config, not per-call, so a change has to rebuild the
+// engine — hence it keys the cache alongside the voice.
+let engine: { voice: string; key: string; tts: Tts } | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 let queue: Promise<unknown> = Promise.resolve(); // own queue — never shared with STT or cloning
 
-function loadEngine(voice: string): Tts {
-  if (engine?.voice === voice) return engine.tts;
+function loadEngine(voice: string, tune?: Tuning): Tts {
+  const key = tuneKey(tune);
+  if (engine?.voice === voice && engine.key === key) return engine.tts;
   const d = dirOf(voice);
   const onnx = d && onnxIn(d.path);
   if (!d || !onnx) throw new Error(`voice "${voice}" not installed`);
@@ -101,14 +106,27 @@ function loadEngine(voice: string): Tts {
   // 1 thread, not 2: STT and TTS live in the same process and share the CPU
   // with the coding agent -- asking for 2 each oversubscribed a 2-core box.
   const common = { numThreads: 1, debug: 0, provider: "cpu" };
+  // noiseScale / noiseScaleW are VITS sampling controls, not speed: VITS samples
+  // a delivery rather than producing one fixed reading. noiseScale varies pitch
+  // and emphasis (low = flat and repeatable, high = livelier but wobblier);
+  // noiseScaleW varies phoneme DURATIONS (low = metronomic, high = looser). A
+  // nudge up can put some life back into the smaller low-tier models.
+  const vitsTune = {
+    ...(tune?.noiseScale !== undefined ? { noiseScale: tune.noiseScale } : {}),
+    ...(tune?.noiseScaleW !== undefined ? { noiseScaleW: tune.noiseScaleW } : {}),
+  };
   const model = d.kind === "kitten"
     ? { kitten: { model: join(d.path, onnx), voices: join(d.path, "voices.bin"), tokens: join(d.path, "tokens.txt"), dataDir: join(d.path, "espeak-ng-data") }, ...common }
-    : { vits: { model: join(d.path, onnx), tokens: join(d.path, "tokens.txt"), dataDir: join(d.path, "espeak-ng-data") }, ...common };
+    : { vits: { model: join(d.path, onnx), tokens: join(d.path, "tokens.txt"), dataDir: join(d.path, "espeak-ng-data"), ...vitsTune }, ...common };
   const tts = new sherpa.OfflineTts({
     model,
-    maxNumSentences: 1, // the caller already chunks by sentence; keep latency per chunk low
+    // 1 by default: the caller already chunks by sentence, which keeps latency
+    // per piece low. silenceScale only trims the gaps sherpa itself inserts
+    // BETWEEN sentences, so it does nothing at 1 — raise this to hear it.
+    maxNumSentences: tune?.maxNumSentences ?? 1,
+    ...(tune?.silenceScale !== undefined ? { silenceScale: tune.silenceScale } : {}),
   });
-  engine = { voice, tts };
+  engine = { voice, key, tts };
   log.debug("voice", `say engine "${voice}" loaded in ${Date.now() - t}ms`);
   return tts;
 }
@@ -119,11 +137,14 @@ function touchIdle(): void {
   idleTimer.unref?.();
 }
 
-/** The output rate of a voice's engine without synthesizing anything: the
- *  streaming response must declare the rate in a header before the first chunk
- *  exists. Piper/VITS models are 22.05 kHz, KittenTTS 24 kHz. */
-export function sayRate(voice = DEFAULT_VOICE): number {
-  return dirOf(voice)?.kind === "kitten" ? 24000 : 22050;
+/** The output rate of a voice's engine. The streaming response must declare the
+ *  rate in a header before the first chunk exists, so ASK THE ENGINE rather than
+ *  assume: piper ships the same voice at several sizes and they do NOT share a
+ *  rate — the medium tier is 22.05 kHz but the low tier is 16 kHz. Guessing
+ *  22.05 for both played low-tier audio 1.38x too fast and pitched up.
+ *  Loading is idempotent and cached, and synthesis is about to load it anyway. */
+export function sayRate(voice = DEFAULT_VOICE, tune?: Tuning): number {
+  try { return loadEngine(voice, tune).sampleRate; } catch { return 22050; }
 }
 
 /** Synthesize `text` with voice `voice`. Serialized on one engine handle.
@@ -138,9 +159,10 @@ export function say(
   voice = DEFAULT_VOICE,
   speed = 1,
   onChunk?: (samples: Float32Array, sampleRate: number) => void,
+  tune?: Tuning,
 ): Promise<{ samples: Float32Array; sampleRate: number }> {
   const run = queue.then(async () => {
-    const tts = loadEngine(voice);
+    const tts = loadEngine(voice, tune);
     const sid = dirOf(voice)?.sid ?? 0;
     const rate = tts.sampleRate;
     // The lexicon drops OOV punctuation with a warning — same clean-up the

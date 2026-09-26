@@ -348,12 +348,13 @@ let sayFallbackToasted = false;
 async function nativeSay(
   text: string, voice?: string, speed?: number,
   onChunk?: (samples: Float32Array, sampleRate: number) => void,
+  tune?: Record<string, number>,
 ): Promise<{ audio: Float32Array; sampleRate: number } | null> {
   try {
     const res = await fetch(`/api/voice/say${onChunk ? "?stream=1" : ""}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, voice, speed }),
+      body: JSON.stringify({ text, voice, speed, tune }),
     });
     if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
     const sampleRate = Number(res.headers.get("x-sample-rate")) || 24000;
@@ -407,9 +408,9 @@ async function nativeSay(
 /** Synthesize a sentence → Float32 PCM + sample rate. Voice/speed come from the
  *  user's pipeline config; a cloned voice routes to the local agent service and
  *  falls back to Kokoro if unavailable. */
-export async function tts(text: string, opts?: { engine?: string; voice?: string; speed?: number; onChunk?: (samples: Float32Array, sampleRate: number) => void }): Promise<{ audio: Float32Array; sampleRate: number }> {
+export async function tts(text: string, opts?: { engine?: string; voice?: string; speed?: number; onChunk?: (samples: Float32Array, sampleRate: number) => void; tune?: Record<string, number> }): Promise<{ audio: Float32Array; sampleRate: number }> {
   if (opts?.engine === "fast") {
-    const fast = await nativeSay(text, opts.voice, opts.speed, opts.onChunk);
+    const fast = await nativeSay(text, opts.voice, opts.speed, opts.onChunk, opts.tune);
     if (fast) return fast;
     opts = { engine: "kokoro", speed: opts.speed }; // worker default voice
   }

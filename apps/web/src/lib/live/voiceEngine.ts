@@ -436,7 +436,7 @@ export class VoiceEngine {
         this.h.onAgentText(spoken, (totalSamples / rate) * 1000);
       };
       const { audio, sampleRate } = await tts(spoken, {
-        engine: ttsCfg.engine, voice: ttsCfg.voice, speed: ttsCfg.speed,
+        engine: ttsCfg.engine, voice: ttsCfg.voice, speed: ttsCfg.speed, tune: loadPipelineConfig().ttsTune,
         onChunk: (f32, sr) => {
           if (this.epoch !== epoch) return; // barged-in mid-synthesis → drop it
           rate = sr; totalSamples += f32.length;

@@ -19,6 +19,14 @@ export interface PipelineConfig {
   // one) for roughly half the wait on merged turns, and which side of that you
   // want depends on the machine.
   stt: { whisperSize: WhisperSize; reuseHeldTranscript: boolean };
+  // Synthesis tuning for the native "fast" engine. These are VITS sampling
+  // controls, NOT speed: noiseScale varies pitch/emphasis (low = flat and
+  // repeatable, high = livelier but wobblier), noiseScaleW varies phoneme
+  // durations (low = metronomic, high = looser). silenceScale trims the gaps
+  // sherpa inserts BETWEEN sentences, so it only does anything when
+  // maxNumSentences > 1 — at 1 we synthesize a sentence per call and there are
+  // no internal gaps to trim.
+  ttsTune: { noiseScale: number; noiseScaleW: number; silenceScale: number; maxNumSentences: number };
   tts: { engine: TtsEngine; voice: string; speed: number }; // TTS engine + voice id + speaking rate
   turn: { engine: TurnEngine; threshold: number; holdMs: number }; // Smart-Turn (semantic) vs silence timeout; sigmoid cutoff (0..1); max mid-thought hold before auto-send
   vad: { speechThreshold: number; redemptionMs: number };   // Silero sensitivity + trailing silence before a turn ends
@@ -27,6 +35,7 @@ export interface PipelineConfig {
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
   stt: { whisperSize: "base", reuseHeldTranscript: false },
   tts: { engine: "kokoro", voice: "af_heart", speed: 1 },
+  ttsTune: { noiseScale: 0.667, noiseScaleW: 0.8, silenceScale: 1, maxNumSentences: 1 },
   turn: { engine: "smart-turn", threshold: 0.5, holdMs: 4000 },
   vad: { speechThreshold: 0.5, redemptionMs: 550 },
 };
@@ -133,6 +142,12 @@ export function clampPipelineConfig(c: PipelineConfig): PipelineConfig {
   const eng = engineOf(engine);
   return {
     stt: { whisperSize: oneOf(c.stt.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize), reuseHeldTranscript: !!c.stt.reuseHeldTranscript },
+    ttsTune: {
+      noiseScale: clamp(num(c.ttsTune?.noiseScale, d.ttsTune.noiseScale), 0, 2),
+      noiseScaleW: clamp(num(c.ttsTune?.noiseScaleW, d.ttsTune.noiseScaleW), 0, 2),
+      silenceScale: clamp(num(c.ttsTune?.silenceScale, d.ttsTune.silenceScale), 0, 4),
+      maxNumSentences: Math.round(clamp(num(c.ttsTune?.maxNumSentences, d.ttsTune.maxNumSentences), 1, 20)),
+    },
     tts: {
       engine,
       // The voice must belong to the selected engine; a stale/foreign id falls
@@ -155,6 +170,12 @@ export function mergePipelineConfig(partial: unknown): PipelineConfig {
   const d = DEFAULT_PIPELINE_CONFIG;
   return clampPipelineConfig({
     stt: { whisperSize: oneOf(p.stt?.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize), reuseHeldTranscript: p.stt?.reuseHeldTranscript ?? d.stt.reuseHeldTranscript },
+    ttsTune: {
+      noiseScale: num(p.ttsTune?.noiseScale, d.ttsTune.noiseScale),
+      noiseScaleW: num(p.ttsTune?.noiseScaleW, d.ttsTune.noiseScaleW),
+      silenceScale: num(p.ttsTune?.silenceScale, d.ttsTune.silenceScale),
+      maxNumSentences: num(p.ttsTune?.maxNumSentences, d.ttsTune.maxNumSentences),
+    },
     tts: { engine: oneOf(p.tts?.engine, TTS_ENGINE_IDS, d.tts.engine), voice: typeof p.tts?.voice === "string" ? p.tts.voice : d.tts.voice, speed: num(p.tts?.speed, d.tts.speed) },
     turn: { engine: oneOf(p.turn?.engine, ["smart-turn", "silence"], d.turn.engine), threshold: num(p.turn?.threshold, d.turn.threshold), holdMs: num(p.turn?.holdMs, d.turn.holdMs) },
     vad: { speechThreshold: num(p.vad?.speechThreshold, d.vad.speechThreshold), redemptionMs: num(p.vad?.redemptionMs, d.vad.redemptionMs) },

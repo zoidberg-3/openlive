@@ -193,6 +193,41 @@ function TurnStage({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
 
 const SAMPLE = "Hi! This is how I sound in a live conversation.";
 
+
+/** Synthesis tuning for the native engine. Deliberately plain number inputs and
+ *  a reset: these are engine internals, not everyday settings, and the useful
+ *  values are found by ear rather than chosen from a list. */
+function TtsTuning({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
+  const set = (k: keyof PipelineConfig["ttsTune"], v: number) => update({ ...cfg, ttsTune: { ...cfg.ttsTune, [k]: v } });
+  const rows: { k: keyof PipelineConfig["ttsTune"]; label: string; hint: string; min: number; max: number; step: number }[] = [
+    { k: "noiseScale", label: "Variation (pitch & emphasis)", hint: "VITS samples a delivery rather than one fixed reading. Low = flat and repeatable, high = livelier but wobblier. Default 0.667.", min: 0, max: 2, step: 0.05 },
+    { k: "noiseScaleW", label: "Variation (timing)", hint: "How much each sound's DURATION varies. Low = metronomic, high = looser, human pacing — too high slurs. Default 0.8.", min: 0, max: 2, step: 0.05 },
+    { k: "silenceScale", label: "Gap between sentences", hint: "Only has an effect when \u201cSentences per pass\u201d is above 1 — at 1 each sentence is synthesized alone, so there is no internal gap to trim.", min: 0, max: 4, step: 0.1 },
+    { k: "maxNumSentences", label: "Sentences per pass", hint: "How many sentences the engine handles per call. 1 starts speaking soonest; higher lets it manage its own pacing between sentences.", min: 1, max: 20, step: 1 },
+  ];
+  return (
+    <details className="rounded-lg border border-foreground/10 p-3">
+      <summary className="cursor-pointer text-label text-foreground">Synthesis tuning (advanced)</summary>
+      <p className="mt-2 text-caption text-faint">Applies to the Fast engine. None of these change speed — they change how the voice sounds. A change reloads the engine, so the next line spoken pays a short load.</p>
+      <div className="mt-3 space-y-3">
+        {rows.map((r) => (
+          <label key={r.k} className="flex flex-col gap-1">
+            <span className="flex items-center justify-between text-label text-foreground">
+              {r.label}
+              <input type="number" value={cfg.ttsTune[r.k]} min={r.min} max={r.max} step={r.step}
+                onChange={(e) => set(r.k, Number(e.target.value))}
+                className="w-20 rounded border border-foreground/15 bg-transparent px-1.5 py-0.5 text-right" />
+            </span>
+            <span className="text-caption text-faint">{r.hint}</span>
+          </label>
+        ))}
+        <button onClick={() => update({ ...cfg, ttsTune: { noiseScale: 0.667, noiseScaleW: 0.8, silenceScale: 1, maxNumSentences: 1 } })}
+          className="text-caption text-faint underline">Reset to defaults</button>
+      </div>
+    </details>
+  );
+}
+
 function TtsStage({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
   const [busy, setBusy] = useState(false);
   // Preview always enabled: it downloads the models itself if needed (spinner
@@ -256,6 +291,7 @@ function TtsStage({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
           </div>
         </label>
       )}
+      {cfg.tts.engine === "fast" && <TtsTuning cfg={cfg} update={update} />}
       <ModelStatus removeKind={cfg.tts.engine === "supertonic" ? "supertonic" : cfg.tts.engine === "kokoro" ? "kokoro" : undefined} />
     </div>
   );

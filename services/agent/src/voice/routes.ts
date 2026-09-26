@@ -10,7 +10,7 @@ import { listVoiceProfiles, createVoiceProfile, deleteVoiceProfile, renameVoiceP
 import { modelInstalled, modelDiskBytes, synthesize, unloadEngine, VOICE_MODEL_DIR, VOICE_PROFILE_DIR } from "./engine.js";
 import { log } from "../log.js";
 import { sttInstalled, transcribe } from "./stt.js";
-import { installedVoices, say, sayInstalled, sayRate } from "./say.js";
+import { installedVoices, say, sayInstalled, sayRate, type Tuning } from "./say.js";
 
 // Voice Studio REST surface, mounted at /voice (behind the same shared-secret
 // gate as everything else; the web app reaches it through a same-origin Next
@@ -210,10 +210,18 @@ voiceRoutes.post("/stt", async (c) => {
 // shape as /tts, so the renderer consumes both identically.
 voiceRoutes.post("/say", async (c) => {
   if (!sayInstalled()) return c.json({ error: "model-not-installed" }, 409);
-  const req = await c.req.json().catch(() => null) as { text?: string; voice?: string; speed?: number } | null;
+  const req = await c.req.json().catch(() => null) as { text?: string; voice?: string; speed?: number; tune?: Tuning } | null;
   const text = req?.text?.trim();
   if (!text) return c.json({ error: "text required" }, 400);
   const speed = Math.min(2, Math.max(0.5, Number(req?.speed) || 1));
+  // Bounded before they reach a native engine; undefined means "engine default".
+  const num = (v: unknown, lo: number, hi: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : undefined);
+  const tune: Tuning = {
+    noiseScale: num(req?.tune?.noiseScale, 0, 2),
+    noiseScaleW: num(req?.tune?.noiseScaleW, 0, 2),
+    silenceScale: num(req?.tune?.silenceScale, 0, 4),
+    maxNumSentences: num(req?.tune?.maxNumSentences, 1, 20),
+  };
   try {
     const t = Date.now();
     // ?stream=1 — emit each chunk as it is produced so the caller can start
@@ -232,15 +240,15 @@ voiceRoutes.post("/say", async (c) => {
                 ctrl.enqueue(new Uint8Array(head));
                 ctrl.enqueue(new Uint8Array(Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength)));
               } catch { /* client gone; synthesis finishes and is discarded */ }
-            });
+            }, tune);
             log.debug("voice", `say(stream) ${text.length} chars -> first ${first}ms, done ${Date.now() - t}ms, ${(out.samples.length / out.sampleRate).toFixed(1)}s`);
           } catch (e) { log.error("voice", "say(stream):", e); }
           finally { try { ctrl.close(); } catch { /* already closed */ } }
         },
       });
-      return new Response(stream, { headers: { "Content-Type": "application/octet-stream", "x-sample-rate": String(sayRate(req?.voice || undefined)), "cache-control": "no-store" } });
+      return new Response(stream, { headers: { "Content-Type": "application/octet-stream", "x-sample-rate": String(sayRate(req?.voice || undefined, tune)), "cache-control": "no-store" } });
     }
-    const audio = await say(text, req?.voice || undefined, speed);
+    const audio = await say(text, req?.voice || undefined, speed, undefined, tune);
     log.debug("voice", `say ${text.length} chars -> ${Date.now() - t}ms for ${(audio.samples.length / audio.sampleRate).toFixed(1)}s`);
     return new Response(Buffer.from(audio.samples.buffer, audio.samples.byteOffset, audio.samples.byteLength), {
       headers: { "Content-Type": "application/octet-stream", "x-sample-rate": String(audio.sampleRate) },
