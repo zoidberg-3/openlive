@@ -257,6 +257,13 @@ export class VoiceEngine {
         useTurnModel ? turnComplete(combined, turnCfg.threshold) : Promise.resolve(true),
       ]);
       const text = reuseHeld ? `${this.pendingText.trim()} ${fresh}`.trim() : fresh;
+      // Gated diagnostics (localStorage["openlive-debug"]). Worth keeping: the
+      // numbers that explain a slow or wrong turn are the clip length, whether
+      // the prefix was reused, and what came back — none of which the perf line
+      // carries, and all of which we had to re-derive by hand more than once.
+      log.debug("voice", `turn: ${(combined.length / 16000).toFixed(1)}s utterance` +
+        `${reuseHeld ? ` (decoded ${(audio.length / 16000).toFixed(1)}s tail, reused prefix)` : ""}` +
+        ` in ${Math.round(performance.now() - perf0)}ms, complete=${modelComplete} -> ${JSON.stringify(text.slice(0, 90))}`);
       const sttEndpointMs = performance.now() - perf0;
       if (this.ptt) { this.pending = combined; if (!isJunk(text)) this.h.onPartial(text); this.setPhase("idle"); return; }
       // Drop empties and Whisper's silence-hallucinations so background noise and
