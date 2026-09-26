@@ -293,3 +293,52 @@ not a valid data point for the research programme.
 ### Shipped today
 PR  https://github.com/katipally/openlive/pull/17  — the five silent defects
 Issue https://github.com/katipally/openlive/issues/18 — native speech measurements
+
+---
+
+## ▶ RESUME — 2026-09-26 ~14:30. Session ended after the re-transcribe test.
+
+**Lucas's verdict: reuseHeldTranscript ON is better — no duplicated sentences.**
+He also raised mic sensitivity in the GUI because his voice was barely being
+picked up, which may have been feeding the accuracy problem all along.
+
+### ⚠ First thing next session: speechThreshold 0.1 has NO hysteresis
+`negativeSpeechThreshold: Math.max(0.1, speechThreshold - 0.15)`, so at 0.1 the
+start and stop thresholds are both 0.1 — a frame just above starts speech, the
+next just below ends it. That chatter produces MORE, SHORTER segments, which is
+precisely the fragmentation that wrecked accuracy on 09-25.
+**Ask him to try 0.25** (still far more sensitive than the 0.5 default, but
+restores the full 0.15 gap) and compare. Do not just set it — he changed it for
+a real reason (he could not be heard).
+
+### Measured, so nobody re-litigates it
+- **Speaking speed is comfort, not latency.** synth is ~flat with speed; only
+  playback shrinks. 1.0 → 9.5s total, 1.5 → 7.8s, and time-to-FIRST-word is
+  unchanged. `tts.speed` (0.5–2) already exists, no code needed.
+- **TTS threads: no finding.** 2 threads measured 18% faster than 1, but the
+  same 1-thread test gave 5.5s and 8.1s on different runs — the spread is bigger
+  than the effect. Left at 1 (STT and TTS share the process and can overlap).
+- Session of 6 turns after the change: voice-to-voice p50 **26.7s**.
+
+### Diagnostics are back, properly
+`log.debug("voice", ...)` in onSpeechEnd reports utterance length, whether the
+prefix was reused, and the text — gated on `localStorage["openlive-debug"]`,
+which is now SET on his machine. I had deleted the temp `[dbg]` probes with the
+scaffolding and immediately lost the ability to answer "did that help?".
+
+### Next candidates (his steer: "speech generation or speech speed")
+1. Speaking speed — one setting, let him pick by ear. Low value, zero cost.
+2. The real remaining cost is synthesis at ~1.4x realtime per sentence. No cheap
+   lever found: Kokoro native 67s, ZipVoice 110s, Supertonic 21.8s, Piper high
+   42s — Piper medium is already the best on this hardware.
+3. Untested idea: shorter replies. The cap in his customInstructions was never
+   evaluated (he said "don't worry about the system prompt").
+
+### Upstream status — planted, not expected to move
+PR #17 (five defects) · PR #19 (ACP model-state picker) · Issue #18 (native
+speech measurements) · Issue #20 (stale agent_session_id hides a session).
+Nobody has looked. Context: every merged PR in that repo is the maintainer's
+own, and the one outside PR (#7) has been open since 11 July. Real work happens
+on the `flow` branch, 213 commits ahead of main, where all five defects still
+exist. Test-rebase onto `flow` = 4 conflict hunks; deliberately deferred until
+`flow` lands on main. **Local-first from here** — decided with Lucas.
