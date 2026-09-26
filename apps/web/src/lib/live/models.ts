@@ -291,8 +291,10 @@ async function nativeStt(audio: Float32Array, sampleRate: number): Promise<strin
     });
     if (res.status === 409) { nativeSttOff = true; return null; }   // model not installed: quietly use WASM
     if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
-    const { text, ms, secs } = (await res.json()) as { text: string; ms?: number; secs?: number };
+    const { text, ms, secs, engine } = (await res.json()) as { text: string; ms?: number; secs?: number; engine?: string };
     nativeSttFails = 0;
+    const { log } = await import("@/lib/log");
+    log.debug("stt", `${engine ?? "?"} · ${secs}s audio · decode ${ms}ms · round-trip ${Math.round(performance.now() - t0)}ms`);
     return text;
   } catch (e) {
     if (++nativeSttFails >= NATIVE_STT_MAX_FAILS) nativeSttOff = true;

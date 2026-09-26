@@ -9,7 +9,7 @@ import unbzip2 from "unbzip2-stream";
 import { listVoiceProfiles, createVoiceProfile, deleteVoiceProfile, renameVoiceProfile } from "@openlive/db";
 import { modelInstalled, modelDiskBytes, synthesize, unloadEngine, VOICE_MODEL_DIR, VOICE_PROFILE_DIR } from "./engine.js";
 import { log } from "../log.js";
-import { sttInstalled, transcribe } from "./stt.js";
+import { lastSttEngine, sttInstalled, transcribe } from "./stt.js";
 import { installedVoices, say, sayInstalled, sayRate, type Tuning } from "./say.js";
 
 // Voice Studio REST surface, mounted at /voice (behind the same shared-secret
@@ -199,7 +199,7 @@ voiceRoutes.post("/stt", async (c) => {
     log.debug("voice", `stt ${secs}s audio -> ${ms}ms`);
     // Timings ride along so the caller can separate decode cost from clip length
     // and transport: a slow turn is otherwise indistinguishable from a long one.
-    return c.json({ text, ms, secs });
+    return c.json({ text, ms, secs, engine: lastSttEngine() });
   } catch (e) {
     log.error("voice", "stt:", e);
     return c.json({ error: String((e as Error)?.message ?? e) }, 500);

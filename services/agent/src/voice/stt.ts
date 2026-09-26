@@ -125,6 +125,11 @@ function touchIdle(): void {
 }
 
 /** Transcribe mono PCM. Serialized on one recognizer handle. */
+// Which engine produced the last transcript, so the caller can report it —
+// how often the fast path actually lands decides whether it earns its keep.
+let lastEngine: "fast" | "whisper" = "whisper";
+export function lastSttEngine(): "fast" | "whisper" { return lastEngine; }
+
 export function transcribe(samples: Float32Array, sampleRate: number): Promise<string> {
   const run = queue.then(async () => {
     const pcm = samples;
@@ -138,12 +143,14 @@ export function transcribe(samples: Float32Array, sampleRate: number): Promise<s
       const t = Date.now();
       const text = await decode(fast);
       if (!isEmpty(text)) {
+        lastEngine = "fast";
         log.debug("voice", `stt fast: ${Date.now() - t}ms`);
         touchIdle();
         return text;
       }
       log.debug("voice", `stt fast returned empty in ${Date.now() - t}ms — falling back`);
     }
+    lastEngine = "whisper";
     const text = await decode(loadRecognizer());
     touchIdle();
     return text;
