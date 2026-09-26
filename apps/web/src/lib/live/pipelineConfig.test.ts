@@ -57,3 +57,15 @@ test("tts engine: unknown engine falls back; voice snaps to the engine's catalog
   assert.equal(mergePipelineConfig({ tts: { engine: "kokoro", voice: "F3" } }).tts.voice, "af_heart");
   assert.equal(SUPERTONIC_VOICES.length, 10);
 });
+
+test("pipelineConfig: reuseHeldTranscript defaults off and survives a round-trip", () => {
+  // Off by default: it trades Whisper context for latency, so it must be opted into.
+  assert.equal(DEFAULT_PIPELINE_CONFIG.stt.reuseHeldTranscript, false);
+  // An older stored config (written before the flag existed) must not break.
+  const legacy = mergePipelineConfig({ stt: { whisperSize: "tiny" } });
+  assert.equal(legacy.stt.reuseHeldTranscript, false);
+  assert.equal(legacy.stt.whisperSize, "tiny");
+  // And an explicit true survives both merge and clamp.
+  assert.equal(mergePipelineConfig({ stt: { whisperSize: "tiny", reuseHeldTranscript: true } }).stt.reuseHeldTranscript, true);
+  assert.equal(clampPipelineConfig({ ...DEFAULT_PIPELINE_CONFIG, stt: { whisperSize: "tiny", reuseHeldTranscript: true } }).stt.reuseHeldTranscript, true);
+});

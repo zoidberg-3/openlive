@@ -12,14 +12,20 @@ export type TtsEngine = "kokoro" | "supertonic" | "fast" | "clone";
 export const TTS_ENGINE_IDS: readonly TtsEngine[] = ["kokoro", "supertonic", "fast", "clone"];
 
 export interface PipelineConfig {
-  stt: { whisperSize: WhisperSize };                        // Whisper.en model size (applies on reload)
+  // `reuseHeldTranscript`: on a mid-thought hold the held audio has ALREADY been
+  // transcribed, so when the user keeps talking, decode only the NEW speech and
+  // append it instead of re-decoding the whole merged buffer. Off by default —
+  // it trades a little Whisper context (two shorter decodes instead of one long
+  // one) for roughly half the wait on merged turns, and which side of that you
+  // want depends on the machine.
+  stt: { whisperSize: WhisperSize; reuseHeldTranscript: boolean };
   tts: { engine: TtsEngine; voice: string; speed: number }; // TTS engine + voice id + speaking rate
   turn: { engine: TurnEngine; threshold: number; holdMs: number }; // Smart-Turn (semantic) vs silence timeout; sigmoid cutoff (0..1); max mid-thought hold before auto-send
   vad: { speechThreshold: number; redemptionMs: number };   // Silero sensitivity + trailing silence before a turn ends
 }
 
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
-  stt: { whisperSize: "base" },
+  stt: { whisperSize: "base", reuseHeldTranscript: false },
   tts: { engine: "kokoro", voice: "af_heart", speed: 1 },
   turn: { engine: "smart-turn", threshold: 0.5, holdMs: 4000 },
   vad: { speechThreshold: 0.5, redemptionMs: 550 },
@@ -124,7 +130,7 @@ export function clampPipelineConfig(c: PipelineConfig): PipelineConfig {
   const engine = oneOf(c.tts.engine, TTS_ENGINE_IDS, d.tts.engine);
   const eng = engineOf(engine);
   return {
-    stt: { whisperSize: oneOf(c.stt.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize) },
+    stt: { whisperSize: oneOf(c.stt.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize), reuseHeldTranscript: !!c.stt.reuseHeldTranscript },
     tts: {
       engine,
       // The voice must belong to the selected engine; a stale/foreign id falls
@@ -146,7 +152,7 @@ export function mergePipelineConfig(partial: unknown): PipelineConfig {
   const p = (partial ?? {}) as Partial<{ [K in keyof PipelineConfig]: Partial<PipelineConfig[K]> }>;
   const d = DEFAULT_PIPELINE_CONFIG;
   return clampPipelineConfig({
-    stt: { whisperSize: oneOf(p.stt?.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize) },
+    stt: { whisperSize: oneOf(p.stt?.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize), reuseHeldTranscript: p.stt?.reuseHeldTranscript ?? d.stt.reuseHeldTranscript },
     tts: { engine: oneOf(p.tts?.engine, TTS_ENGINE_IDS, d.tts.engine), voice: typeof p.tts?.voice === "string" ? p.tts.voice : d.tts.voice, speed: num(p.tts?.speed, d.tts.speed) },
     turn: { engine: oneOf(p.turn?.engine, ["smart-turn", "silence"], d.turn.engine), threshold: num(p.turn?.threshold, d.turn.threshold), holdMs: num(p.turn?.holdMs, d.turn.holdMs) },
     vad: { speechThreshold: num(p.vad?.speechThreshold, d.vad.speechThreshold), redemptionMs: num(p.vad?.redemptionMs, d.vad.redemptionMs) },

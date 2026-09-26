@@ -124,12 +124,27 @@ function SttStage({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
       <EngineCard name="Whisper" desc="OpenAI Whisper via transformers.js — runs on WebGPU with a WASM fallback." />
       <label className="flex flex-col gap-1.5">
         <span className="text-label text-foreground">Model size</span>
-        <select value={cfg.stt.whisperSize} onChange={(e) => update({ ...cfg, stt: { whisperSize: e.target.value as PipelineConfig["stt"]["whisperSize"] } })} className={selectClass}>
+        <select value={cfg.stt.whisperSize} onChange={(e) => update({ ...cfg, stt: { ...cfg.stt, whisperSize: e.target.value as PipelineConfig["stt"]["whisperSize"] } })} className={selectClass}>
           {WHISPER_SIZES.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </label>
       {!hasWebGPU() && <p className="-mt-2 text-caption text-faint">WebGPU isn&apos;t available here, so calls run the Tiny model regardless — the size choice applies when WebGPU is.</p>}
       {cfg.stt.whisperSize === "large-v3-turbo" && <p className="-mt-2 text-caption text-faint">A big download and a real GPU-memory footprint — expect the best transcription, but drop back to Small if your machine struggles.</p>}
+      <label className="flex cursor-pointer select-none items-start gap-2.5 text-label text-foreground">
+        <button role="switch" aria-checked={cfg.stt.reuseHeldTranscript}
+          onClick={() => update({ ...cfg, stt: { ...cfg.stt, reuseHeldTranscript: !cfg.stt.reuseHeldTranscript } })}
+          className={cn("relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition", cfg.stt.reuseHeldTranscript ? "bg-accent" : "bg-foreground/15")}>
+          <span className={cn("absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left]", cfg.stt.reuseHeldTranscript ? "left-[18px]" : "left-0.5")} />
+        </button>
+        <span>
+          Don&apos;t re-transcribe held speech
+          <span className="mt-0.5 block text-caption text-faint">
+            When a pause is held mid-thought and you keep talking, transcribe only the new speech
+            and append it, instead of decoding the whole utterance again. Much faster on slow
+            machines; gives the model less context per pass, so it can be slightly less accurate.
+          </span>
+        </span>
+      </label>
       <ModelStatus removeKind="whisper" />
     </div>
   );

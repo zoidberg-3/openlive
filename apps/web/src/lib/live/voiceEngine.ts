@@ -31,6 +31,9 @@ export interface VoiceEngineHandlers {
 
 const PARTIAL_MS = 500;      // min gap between interim transcriptions
 const ONSET_GRACE_MS = 250;  // agent's own first syllable can't self-trigger barge-in
+// 1.5s at 16kHz: below this a tail decodes badly on its own, so the merged
+// buffer is re-decoded whole instead (see reuseHeldTranscript).
+const REUSE_MIN_TAIL_SAMPLES = 16000 * 1.5;
 const MIN_UTTER_SAMPLES = 16000 * 0.25; // ignore <0.25s blips
 const RMS_GATE = 0.006;      // reject near-silence; low enough to hear a soft talker
 
@@ -236,10 +239,24 @@ export class VoiceEngine {
       // While push-to-talk is held, no end-of-turn decision at all: just accumulate
       // and caption — release (endPtt) is the one and only turn boundary.
       const useTurnModel = !this.ptt && turnModelReady() && turnCfg.engine !== "silence";
-      const [text, modelComplete] = await Promise.all([
-        stt(combined).then((t) => t.trim()),
+      // A held mid-thought utterance was already transcribed (that is how we knew
+      // it was mid-thought), so re-decoding the merged buffer pays for the same
+      // words twice — and the cost grows with every hold: measured 10.2s audio
+      // decoded in 12.6s, then the SAME speech plus a tail decoded again as a
+      // 19.5s buffer in 28.8s. Opt-in, because appending two shorter decodes
+      // gives Whisper less context than one long one. Only reuse when the new
+      // speech is long enough to decode on its own — Whisper tiny is poor on
+      // very short fragments, and a mangled tail is worse than a slow turn.
+      const sttCfg = loadPipelineConfig().stt;
+      const reuseHeld = sttCfg.reuseHeldTranscript && !this.ptt
+        && !!this.pending && !!this.pendingText.trim() && audio.length >= REUSE_MIN_TAIL_SAMPLES;
+      const [fresh, modelComplete] = await Promise.all([
+        stt(reuseHeld ? audio : combined).then((t) => t.trim()),
+        // End-of-turn is judged on the WHOLE utterance either way — it is a
+        // semantic call about the complete thought, not about the new fragment.
         useTurnModel ? turnComplete(combined, turnCfg.threshold) : Promise.resolve(true),
       ]);
+      const text = reuseHeld ? `${this.pendingText.trim()} ${fresh}`.trim() : fresh;
       const sttEndpointMs = performance.now() - perf0;
       if (this.ptt) { this.pending = combined; if (!isJunk(text)) this.h.onPartial(text); this.setPhase("idle"); return; }
       // Drop empties and Whisper's silence-hallucinations so background noise and
