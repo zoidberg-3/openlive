@@ -91,7 +91,7 @@ export interface AcpOpts {
   completeElicitation?: (elicitationId: string) => void; // URL elicitation finished agent-side
 }
 
-function adapterFor(id: AgentId, cwd?: string): { command: string; args: string[]; cwd: string } {
+export function adapterFor(id: AgentId, cwd?: string): { command: string; args: string[]; cwd: string } {
   const base = AGENT_REGISTRY[id].adapter;
   const override = getSetting(`acpCommand:${id}`)?.trim(); // e.g. "npx @agentclientprotocol/claude-agent-acp"
   const [cmd, ...args] = override ? override.split(/\s+/) : [base.command, ...base.args];
