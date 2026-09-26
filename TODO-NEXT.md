@@ -342,3 +342,42 @@ own, and the one outside PR (#7) has been open since 11 July. Real work happens
 on the `flow` branch, 213 commits ahead of main, where all five defects still
 exist. Test-rebase onto `flow` = 4 conflict hunks; deliberately deferred until
 `flow` lands on main. **Local-first from here** — decided with Lucas.
+
+---
+
+## STREAMING TTS — built, reverted, blocked upstream (2026-09-26)
+**Do not re-attempt until k2-fsa/sherpa-onnx#3989 is fixed.**
+
+The win is real: sherpa's `generateAsync({ onProgress })` hands back audio per
+sentence, so playback can start at **1.3s instead of 7.6s** (~6x), and the gap
+grows with reply length — the 215-char reply that took 37s before a word came
+out is the case it would fix.
+
+**Why it is off:** the progress callback aborts the process with
+`FATAL ERROR: v8::ArrayBuffer::New Allocation failed` inside
+`napi_create_arraybuffer`, **~50% of runs** (4/8, then 3/6). It kills the agent
+service — i.e. the process driving the conversation. Reverted in full; the
+non-streaming path is untouched.
+
+What the evidence says: callbacks DO fire first with sane sizes (~150k samples,
+~600KB), RSS stays flat at ~280MB, 5.9GB free. Same text and engine never fails
+WITHOUT `onProgress`. `numThreads` 1 vs 2 makes no difference. So: a race in the
+callback/queue path, not a sizing bug or a leak.
+
+**Two mistakes of mine worth remembering:**
+- I reported it as deterministic off TWO runs. It is a coin flip. Repeat a
+  non-deterministic-looking failure enough times to have a rate before claiming
+  one, especially in someone else's tracker.
+- I claimed "dies before the first callback" because no callback output
+  appeared — but `console.log` is BUFFERED and a fatal abort discards it. Use
+  `fs.writeSync(2, ...)` when instrumenting anything that might abort.
+Both corrected publicly in the issue.
+
+**If revisited:** process isolation (synthesise in a child that may safely die,
+fall back to non-streaming on abort) is the only workaround shape left, and at a
+50% abort rate it loses the synthesis half the time — poor value for the
+complexity while the root cause is unknown.
+
+### Still untested, and now the only remaining lever for speaking speed
+**Shorter replies.** Synthesis time is proportional to words; the cap in his
+customInstructions has never been evaluated. Needs a live call, costs nothing.
