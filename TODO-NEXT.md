@@ -444,3 +444,52 @@ WASM worker is loaded at all now that STT and TTS are both native — if it is
 not needed, not loading it would remove the other suspect entirely.
 
 **Workaround meanwhile:** restart the app every hour or so of heavy use.
+
+---
+
+## ▶ RESUME — 2026-09-26 ~22:50. Stopped on usage limit (resets midnight).
+
+### Tomorrow's job, agreed: SESSION INTEROP
+Make sessions visible across all three surfaces. What is already true:
+| direction | state |
+|---|---|
+| OpenLive → `claude --resume` | ✅ works — they are real Claude Code sessions, stamped `claude-vscode` so /resume does not hide them |
+| Claude Code CLI → OpenLive | ✅ works, BUT only with History's filter on **"All"** — default hides them, which is why Lucas could not see his |
+| **Hermes ↔ OpenLive** | ❓ **untested both ways** — the registry has a `hermes-sqlite` disk parser, never verified |
+So the real work is (a) Hermes, both directions, and (b) making the Claude Code
+direction discoverable rather than hidden behind a filter nobody knows about.
+Do NOT rebuild `session/list` — external sessions already ship (see the revert
+in commit 1b7b25f for why).
+
+### Current live settings (all set via localStorage, not code defaults)
+`tts.engine=fast voice=southern_english_female_low speed=1`
+`stt.whisperSize=tiny reuseHeldTranscript=true` (Moonshine fast path + Whisper fallback)
+`turn.engine=smart-turn threshold=0.65 holdMs=3000` ← threshold raised tonight, UNTESTED
+`vad.speechThreshold=0.1 redemptionMs=1400`
+
+### Where the numbers landed
+voice-to-voice **p50 16.4s**, best turn **11.7s** — from 86s on Wednesday.
+Fast path lands ~82-86% of turns; the Whisper fallbacks are the slow ones.
+
+### Open, honest state
+- **threshold 0.65 is untested.** It should stop sentences splitting into two
+  prompts. If it now waits too long before replying, drop toward 0.55.
+- **Lucas's own finding beat all my model work: speaking slower and more
+  steadily improved accuracy.** Worth remembering before swapping models again.
+- **The "4.7GB renderer leak" is NOT confirmed.** A 12-minute sample showed RSS
+  rise 1118→1377MB then FALL to 1224MB with the JS heap flat at ~25MB. That is
+  churn, not a runaway. The one 4.7GB observation stands unexplained; watch it
+  over a long session before believing me. `scratchpad/mem-watch.sh` samples
+  RSS + JS heap together.
+- Accuracy vs speed: every engine faster than Whisper is less accurate
+  (Moonshine, Zipformer 3.4x but ALL CAPS and no punctuation — which would also
+  break `endsMidThought`, SenseVoice slower AND worse, Moonshine base worse and
+  slower). Whisper tiny.en fp32 remains the accuracy benchmark.
+- `check-voice-updates` (in ~/bin, plus a Monday 9am cron) watches for the
+  sherpa release that unblocks Moonshine v2.
+
+### Tooling note for next time
+`scratchpad/watch-live.mjs` is a SELF-RECONNECTING console watcher. Use it, not
+the old one-shot watchers — three separate times today a watcher silently
+stopped collecting (expired loop, filter that did not match a new log tag, and
+a CDP target lost on app restart) and a session's data was lost each time.
