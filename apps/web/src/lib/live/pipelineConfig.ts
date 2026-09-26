@@ -97,6 +97,8 @@ export const SUPERTONIC_VOICES: VoiceOption[] = (["M1", "M2", "M3", "M4", "M5", 
 // first spoken sentence. The voices are rougher than Kokoro's — this is the
 // speed choice, offered alongside rather than instead of it.
 export const KITTEN_VOICES: VoiceOption[] = [
+  { id: "alan_low", name: "Alan — fast (small model)", accent: "British", gender: "Male" },
+  { id: "southern_english_female_low", name: "Southern English female — fast (small model)", accent: "British", gender: "Female" },
   { id: "northern_english_male", name: "Northern English male", accent: "British", gender: "Male" },
   { id: "southern_english_female", name: "Southern English female", accent: "British", gender: "Female" },
   { id: "alan", name: "Alan", accent: "British", gender: "Male" },
@@ -111,7 +113,7 @@ export const KITTEN_VOICES: VoiceOption[] = [
 export const TTS_ENGINES: { id: TtsEngine; name: string; voices: VoiceOption[]; defaultVoice: string }[] = [
   { id: "kokoro", name: "Kokoro — natural, 28 voices (~82 MB)", voices: KOKORO_VOICES, defaultVoice: "af_heart" },
   { id: "supertonic", name: "Supertonic — fastest, 10 voices (~400 MB)", voices: SUPERTONIC_VOICES, defaultVoice: "M1" },
-  { id: "fast", name: "Fast — native, lowest latency on low-power CPUs (~20 MB per voice)", voices: KITTEN_VOICES, defaultVoice: "northern_english_male" },
+  { id: "fast", name: "Fast — native, lowest latency on low-power CPUs (~20 MB per voice)", voices: KITTEN_VOICES, defaultVoice: "alan_low" },
   // Cloned voices (Voice Studio): synthesis runs in the local agent service
   // (ZipVoice via sherpa-onnx); `voice` holds a profile id, and the runtime
   // falls back to Kokoro if the model/profile is missing.

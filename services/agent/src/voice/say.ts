@@ -29,6 +29,15 @@ const IDLE_UNLOAD_MS = 30 * 60_000; // a reload mid-call costs ~7 s; holding is 
 // kitten ~2.2-3.3s, and piper-HIGH ~42s — the high tier is unusable here,
 // so only `medium` voices are offered.
 const VOICES: Record<string, { dir: string; kind: "vits" | "kitten"; sid?: number }> = {
+  // "-low" is piper's small tier: the SAME voice and accent, a smaller model.
+  // It is the difference between synthesis that keeps up with speech and
+  // synthesis that cannot. Measured here on the same sentence:
+  //   medium  first audio 3.9s, 0.51x realtime  -> the queue grows forever
+  //   low     first audio 0.9s, 1.74x realtime  -> the queue can never grow
+  // Below 1x every reply adds to a backlog; above it, gaps between sentences
+  // stop happening at all. Not every voice has a low tier.
+  "alan_low": { dir: "piper-en_GB-alan-low", kind: "vits" },
+  "southern_english_female_low": { dir: "piper-en_GB-southern_english_female-low", kind: "vits" },
   "northern_english_male": { dir: "piper-en_GB-northern_english_male-medium", kind: "vits" },
   "southern_english_female": { dir: "piper-en_GB-southern_english_female-medium", kind: "vits" },
   "alan": { dir: "piper-en_GB-alan-medium", kind: "vits" },
@@ -40,7 +49,7 @@ const VOICES: Record<string, { dir: string; kind: "vits" | "kitten"; sid?: numbe
   "kitten": { dir: "kitten", kind: "kitten", sid: 0 },
 };
 export const SAY_VOICE_IDS = Object.keys(VOICES);
-const DEFAULT_VOICE = "northern_english_male";
+const DEFAULT_VOICE = "alan_low";
 
 function dirOf(voice: string): { path: string; kind: "vits" | "kitten"; sid: number } | null {
   const v = VOICES[voice] ?? VOICES[DEFAULT_VOICE];
