@@ -411,3 +411,36 @@ fallback can go and STT drops to ~1/3 of its current cost.
 Rejected on measurement, do not retry blind: level normalisation (both engines
 are already level-robust — correct at 8x quieter), and trimming the lead-in
 (implemented, measured, did not fix the empties).
+
+---
+
+## 🐛 OPEN BUG: renderer grows to ~4.7GB in about an hour of calls (2026-09-26)
+Lucas reported the app frozen. It was not frozen — the machine was out of RAM:
+`electron --type=renderer` had reached **4,751 MB** (43% of 10.9 GB) after ~1
+hour, RAM available down to 2.1 GB, loadavg 9.7. Closing the app returned
+6.2 GB; a fresh renderer starts at **153 MB**.
+
+**Key measurement: the JS heap was only 28 MB used / 32 MB total.** So this is
+NOT JavaScript objects — it is native allocation outside the JS heap:
+WebAudio buffers and/or WASM heaps.
+
+**Prime suspect is mine.** Streaming TTS calls `player.play()` once per CHUNK
+instead of once per sentence, and every call does `ctx.createBuffer()` — an
+AudioBuffer lives in native memory. `AudioPlayer` releases via
+`src.onended = () => this.sources.delete(src)`, so any source whose `onended`
+never fires (barge-in, `flush()`, a suspended context) leaks its buffer.
+Streaming multiplied the number of buffers, so a pre-existing slow leak would
+now show up fast.
+
+NOT yet proven — the WASM worker (Kokoro/Whisper via onnxruntime-web) also
+allocates outside the JS heap and may still be loaded even though synthesis is
+native now. Both need ruling in or out.
+
+**How to investigate:** run a call, then sample
+`ps -o rss= -p <renderer pid>` every 30s alongside `performance.memory` over
+CDP. If RSS climbs while the JS heap stays flat, it is native. Then check
+whether `sources`/`timers` in `audioPlayback.ts` keep growing, and whether the
+WASM worker is loaded at all now that STT and TTS are both native — if it is
+not needed, not loading it would remove the other suspect entirely.
+
+**Workaround meanwhile:** restart the app every hour or so of heavy use.
