@@ -2,7 +2,6 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { loadEnv } from "@openlive/db";
-import { AGENT_IDS } from "@openlive/shared";
 import { ensureSeedProviders } from "./providers.js";
 import { attachLiveWs } from "./live/ws.js";
 import type { Server } from "node:http";
@@ -30,18 +29,6 @@ app.get("/health", (c) => c.json({ ok: true }));
 // Lazy import keeps sherpa-onnx (native addon) out of the boot path.
 const { voiceRoutes } = await import("./voice/routes.js");
 app.route("/voice", voiceRoutes);
-
-// Sessions the AGENT knows about in a folder (its own CLI's sessions included),
-// as opposed to the chats OpenLive has records of. Spawns a throwaway adapter,
-// so it is lazy-imported and briefly cached inside the module.
-app.get("/agents/:id/sessions", async (c) => {
-  const cwd = c.req.query("cwd")?.trim();
-  if (!cwd) return c.json({ error: "cwd required" }, 400);
-  const id = c.req.param("id");
-  if (!AGENT_IDS.includes(id as never)) return c.json({ error: "unknown agent" }, 404);
-  const { listAgentSessions } = await import("./agents/acp-sessions.js");
-  return c.json({ sessions: await listAgentSessions(id as never, cwd) });
-});
 
 const port = Number(process.env.AGENT_PORT ?? 8787);
 // Bind loopback ONLY. The agent has no business on the LAN: the desktop renderer
