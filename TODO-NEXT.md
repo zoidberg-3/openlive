@@ -381,3 +381,33 @@ complexity while the root cause is unknown.
 ### Still untested, and now the only remaining lever for speaking speed
 **Shorter replies.** Synthesis time is proportional to words; the cap in his
 customInstructions has never been evaluated. Needs a live call, costs nothing.
+
+---
+
+## ⏭ RETEST MOONSHINE WHEN sherpa-onnx-node 1.13.9 LANDS (2026-09-26)
+Moonshine decodes ~2.9x faster than Whisper for the same words (2.1s vs 6.2s on
+an 8s utterance) and is live as the fast path with a Whisper fallback. The
+fallback exists because it sometimes returns an EMPTY transcript, trigger
+unknown — see the comment block in `services/agent/src/voice/stt.ts` for the
+five causes that were measured and ruled out.
+
+**Three things line up on the next release:**
+- We are testing **v1** (`sherpa-onnx-moonshine-tiny-en-int8`, dated
+  **2024-10-26**). A **v2** exists (`...-quantized-2026-02-27`).
+- v2 **cannot load on 1.13.8**: its config only accepts the v1 four-file layout
+  (preprocessor/encoder/uncachedDecoder/cachedDecoder) and v2 ships two files
+  (`encoder_model.ort` + `decoder_model_merged.ort`). All three config
+  permutations tried and failed — "Please check your config!".
+- Upstream fixes for v2 decoding merged **2026-09-22**, AFTER 1.13.8 shipped
+  **2026-09-10**: k2-fsa/sherpa-onnx#3975 and #3976 ("feed the decoder
+  encoder_attention_mask at raw audio length") plus #3805 (v2
+  `decoder_model_merged.ort` fails above a length). An attention-mask bug that
+  depends on audio length is the right shape for what we see.
+
+**On 1.13.9:** bump, download `sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27`,
+point `FAST_STT_DIR` at it, and re-measure. If v2 is reliable, the Whisper
+fallback can go and STT drops to ~1/3 of its current cost.
+
+Rejected on measurement, do not retry blind: level normalisation (both engines
+are already level-robust — correct at 8x quieter), and trimming the lead-in
+(implemented, measured, did not fix the empties).
