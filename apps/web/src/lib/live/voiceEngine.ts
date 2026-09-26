@@ -404,29 +404,53 @@ export class VoiceEngine {
       if (!spoken) return;
       // Read voice/speed per sentence so a settings change applies to the next reply.
       const ttsCfg = loadPipelineConfig().tts;
-      const { audio, sampleRate } = await tts(spoken, { engine: ttsCfg.engine, voice: ttsCfg.voice, speed: ttsCfg.speed });
-      if (this.epoch !== epoch) return;
-      const durationMs = (audio.length / sampleRate) * 1000; // how long THIS chunk voices — paces the caption reveal
-      if (this.phase !== "speaking") {
-        this.speakingStartAt = Date.now(); this.setPhase("speaking");
-        if (this.turnSentAt) { this.turnSentAt = 0; perf.firstAudio(); }
-      }
-      // Show the caption for THIS chunk when it actually starts playing (not now,
-      // when it finished synthesizing — synth runs ahead of the voice), so the
-      // subtitle reads out only the words being spoken right now.
-      this.player.play(audio, epoch, sampleRate, () => {
+      // Engines that can stream hand back audio per sentence while the rest is
+      // still being made, so playback starts on the FIRST piece rather than the
+      // finished result. The player schedules back-to-back off `nextAt`, so
+      // feeding it pieces in order is gapless.
+      let voiced = 0;          // pieces actually handed to the player
+      let totalSamples = 0;
+      let rate = 24000;
+      const startedSpeaking = () => {
+        if (this.phase !== "speaking") {
+          this.speakingStartAt = Date.now(); this.setPhase("speaking");
+          if (this.turnSentAt) { this.turnSentAt = 0; perf.firstAudio(); }
+        }
+      };
+      // Show the caption when the voice actually STARTS (not when synthesis
+      // finished — synth runs ahead of the voice), so the subtitle reads out only
+      // the words being spoken right now. Fires once per sentence, on its first
+      // piece; `totalSamples` is read at fire time, by which point the rest of
+      // the sentence has normally arrived.
+      const caption = () => {
         if (this.epoch !== epoch) return;
         // Out-of-band lines (say(): errors, reminders) are VOICED but are not the
         // model's reply — keep them out of `spokenText` (barge-in cutoff) and out of
         // onAgentText (which the client persists into the transcript), or they get
         // saved as if the assistant said them and contaminate the cutoff.
         if (outOfBand) return;
-        // Accumulate ONLY as each chunk actually begins playing — so on barge-in
+        // Accumulate ONLY as each sentence actually begins playing — so on barge-in
         // `spokenText` is exactly what was voiced, and the unspoken (still-queued)
         // tail is excluded from the saved history.
         this.spokenText += (this.spokenText ? " " : "") + spoken;
-        this.h.onAgentText(spoken, durationMs);
+        this.h.onAgentText(spoken, (totalSamples / rate) * 1000);
+      };
+      const { audio, sampleRate } = await tts(spoken, {
+        engine: ttsCfg.engine, voice: ttsCfg.voice, speed: ttsCfg.speed,
+        onChunk: (f32, sr) => {
+          if (this.epoch !== epoch) return; // barged-in mid-synthesis → drop it
+          rate = sr; totalSamples += f32.length;
+          if (voiced++ === 0) { startedSpeaking(); this.player.play(f32, epoch, sr, caption); }
+          else this.player.play(f32, epoch, sr);
+        },
       });
+      if (this.epoch !== epoch) return;
+      if (voiced === 0) {
+        // Engine didn't stream (Kokoro / Supertonic / cloned voices) — play whole.
+        rate = sampleRate; totalSamples = audio.length;
+        startedSpeaking();
+        this.player.play(audio, epoch, sampleRate, caption);
+      }
     }).catch((e) => { log.warn("live", "TTS failed:", e?.message ?? e); });
   }
 

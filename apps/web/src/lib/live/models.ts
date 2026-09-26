@@ -345,16 +345,53 @@ async function cloneTts(text: string, voice: string, speed?: number): Promise<{ 
 // KittenTTS runs in the LOCAL agent service (sherpa-onnx), like cloned voices —
 // but needs no reference recording. Falls back to Kokoro on any failure.
 let sayFallbackToasted = false;
-async function nativeSay(text: string, voice?: string, speed?: number): Promise<{ audio: Float32Array; sampleRate: number } | null> {
+async function nativeSay(
+  text: string, voice?: string, speed?: number,
+  onChunk?: (samples: Float32Array, sampleRate: number) => void,
+): Promise<{ audio: Float32Array; sampleRate: number } | null> {
   try {
-    const res = await fetch("/api/voice/say", {
+    const res = await fetch(`/api/voice/say${onChunk ? "?stream=1" : ""}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, voice, speed }),
     });
     if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
-    const buf = await res.arrayBuffer();
-    return { audio: new Float32Array(buf), sampleRate: Number(res.headers.get("x-sample-rate")) || 24000 };
+    const sampleRate = Number(res.headers.get("x-sample-rate")) || 24000;
+    if (!onChunk || !res.body) {
+      const buf = await res.arrayBuffer();
+      return { audio: new Float32Array(buf), sampleRate };
+    }
+    // Streamed: uint32le sample count, then that many float32 samples. Hand each
+    // frame over the moment it is whole — that is the entire point, so a reply
+    // starts playing while the rest is still being synthesized.
+    const reader = res.body.getReader();
+    const parts: Float32Array[] = [];
+    let carry = new Uint8Array(0);
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value?.length) {
+        const merged = new Uint8Array(carry.length + value.length);
+        merged.set(carry); merged.set(value, carry.length);
+        carry = merged;
+      }
+      // A frame header can straddle reads, so only consume complete frames.
+      while (carry.length >= 4) {
+        const count = new DataView(carry.buffer, carry.byteOffset, 4).getUint32(0, true);
+        const need = 4 + count * 4;
+        if (carry.length < need) break;
+        // Copy out: the slice must not alias the rolling buffer.
+        const f32 = new Float32Array(carry.slice(4, need).buffer);
+        parts.push(f32); total += f32.length;
+        onChunk(f32, sampleRate);
+        carry = carry.slice(need);
+      }
+      if (done) break;
+    }
+    const audio = new Float32Array(total);
+    let at = 0;
+    for (const p of parts) { audio.set(p, at); at += p.length; }
+    return { audio, sampleRate };
   } catch (e) {
     if (!sayFallbackToasted) {
       sayFallbackToasted = true;
@@ -370,9 +407,9 @@ async function nativeSay(text: string, voice?: string, speed?: number): Promise<
 /** Synthesize a sentence → Float32 PCM + sample rate. Voice/speed come from the
  *  user's pipeline config; a cloned voice routes to the local agent service and
  *  falls back to Kokoro if unavailable. */
-export async function tts(text: string, opts?: { engine?: string; voice?: string; speed?: number }): Promise<{ audio: Float32Array; sampleRate: number }> {
+export async function tts(text: string, opts?: { engine?: string; voice?: string; speed?: number; onChunk?: (samples: Float32Array, sampleRate: number) => void }): Promise<{ audio: Float32Array; sampleRate: number }> {
   if (opts?.engine === "fast") {
-    const fast = await nativeSay(text, opts.voice, opts.speed);
+    const fast = await nativeSay(text, opts.voice, opts.speed, opts.onChunk);
     if (fast) return fast;
     opts = { engine: "kokoro", speed: opts.speed }; // worker default voice
   }

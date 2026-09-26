@@ -110,15 +110,41 @@ function touchIdle(): void {
   idleTimer.unref?.();
 }
 
-/** Synthesize `text` with voice `sid`. Serialized on one engine handle. */
-export function say(text: string, voice = DEFAULT_VOICE, speed = 1): Promise<{ samples: Float32Array; sampleRate: number }> {
+/** The output rate of a voice's engine without synthesizing anything: the
+ *  streaming response must declare the rate in a header before the first chunk
+ *  exists. Piper/VITS models are 22.05 kHz, KittenTTS 24 kHz. */
+export function sayRate(voice = DEFAULT_VOICE): number {
+  return dirOf(voice)?.kind === "kitten" ? 24000 : 22050;
+}
+
+/** Synthesize `text` with voice `voice`. Serialized on one engine handle.
+ *  `onChunk` receives audio AS IT IS GENERATED, so a reply can start playing
+ *  while the rest is still being made — measured here, first audio at 1.3s
+ *  against 7.6s for the finished result, and the gap grows with length.
+ *  NOTE: requires sherpa-onnx-node >= 1.13.5. On 1.13.4 this callback aborted
+ *  the process with a fatal OOM in napi_create_arraybuffer on ~50% of runs
+ *  (k2-fsa/sherpa-onnx#3989); 1.13.8 measured 16/16 clean. */
+export function say(
+  text: string,
+  voice = DEFAULT_VOICE,
+  speed = 1,
+  onChunk?: (samples: Float32Array, sampleRate: number) => void,
+): Promise<{ samples: Float32Array; sampleRate: number }> {
   const run = queue.then(async () => {
     const tts = loadEngine(voice);
     const sid = dirOf(voice)?.sid ?? 0;
+    const rate = tts.sampleRate;
     // The lexicon drops OOV punctuation with a warning — same clean-up the
     // cloning engine does.
     const clean = text.replace(/[—–]/g, ", ").trim();
-    const audio = await tts.generateAsync({ text: clean, sid, speed });
+    const audio = await tts.generateAsync({
+      text: clean, sid, speed,
+      ...(onChunk ? { onProgress: (info: { samples: Float32Array }) => {
+        // Copy: the addon's buffer is not ours to keep past the callback.
+        try { onChunk(Float32Array.from(info.samples), rate); } catch { /* consumer gone */ }
+        return 1; // returning 0 would cancel synthesis
+      } } : {}),
+    });
     touchIdle();
     return audio;
   });
