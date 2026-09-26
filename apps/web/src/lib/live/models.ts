@@ -294,7 +294,7 @@ async function nativeStt(audio: Float32Array, sampleRate: number): Promise<strin
     const { text, ms, secs, engine } = (await res.json()) as { text: string; ms?: number; secs?: number; engine?: string };
     nativeSttFails = 0;
     const { log } = await import("@/lib/log");
-    log.debug("stt", `${engine ?? "?"} · ${secs}s audio · decode ${ms}ms · round-trip ${Math.round(performance.now() - t0)}ms`);
+    log.debug("stt", `${engine ?? "?"} · ${secs}s audio · decode ${ms}ms · round-trip ${Math.round(performance.now() - t0)}ms · ${JSON.stringify(text.slice(0, 60))}`);
     return text;
   } catch (e) {
     if (++nativeSttFails >= NATIVE_STT_MAX_FAILS) nativeSttOff = true;

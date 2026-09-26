@@ -49,7 +49,19 @@ export function fastSttInstalled(): boolean {
 // 40% makes it fail. Trimming the lead-in was tried as a fix and does not work.
 // So the behaviour is deterministic per input and unpredictable across inputs:
 // detect the empty result, fall back, move on.
-const isEmpty = (t: string) => t.replace(/[\s.,!?-]/g, "").length === 0;
+// The fast engine does not only fail by returning nothing — it can fail SOFTLY,
+// returning a short hallucination ("Thank you.") for an utterance that clearly
+// carried more. That passes an empty check, gets accepted, and is then dropped
+// by the caller's own junk filter, so the user's words vanish and they repeat
+// themselves. Treat "implausibly little text for this much speech" as a failure
+// too. ~12 chars/sec is ordinary speech; 2 is a very low bar, and it is only
+// applied above 3s so that a genuine "yes" or "no thanks" still stands.
+const MIN_CHARS_PER_SEC = 2;
+const IMPLAUSIBLE_ABOVE_SECS = 3;
+function fastFailed(text: string, secs: number): boolean {
+  if (text.replace(/[\s.,!?-]/g, "").length === 0) return true;
+  return secs > IMPLAUSIBLE_ABOVE_SECS && text.length < secs * MIN_CHARS_PER_SEC;
+}
 const IDLE_UNLOAD_MS = 30 * 60_000; // ~200 MB resident; a reload mid-call costs ~7 s,
 // which is worse than holding it -- a voice call can easily pause 5 min mid-thought.
 
@@ -142,13 +154,14 @@ export function transcribe(samples: Float32Array, sampleRate: number): Promise<s
     if (fast) {
       const t = Date.now();
       const text = await decode(fast);
-      if (!isEmpty(text)) {
+      const secs = samples.length / sampleRate;
+      if (!fastFailed(text, secs)) {
         lastEngine = "fast";
         log.debug("voice", `stt fast: ${Date.now() - t}ms`);
         touchIdle();
         return text;
       }
-      log.debug("voice", `stt fast returned empty in ${Date.now() - t}ms — falling back`);
+      log.debug("voice", `stt fast unusable after ${Date.now() - t}ms (${secs.toFixed(1)}s audio -> ${JSON.stringify(text.slice(0, 40))}) — falling back`);
     }
     lastEngine = "whisper";
     const text = await decode(loadRecognizer());
