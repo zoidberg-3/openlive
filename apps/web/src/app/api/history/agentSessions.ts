@@ -13,6 +13,29 @@ import { AGENT_LIST, type AgentDef } from "@openlive/shared";
 // RECENT files, first LINES only for the title. If an agent changes its layout,
 // that agent's sessions just stop appearing (the rest keep working).
 
+// Load node:sqlite at RUNTIME, bypassing the bundler. `require("node:sqlite")`
+// does not survive Next's Turbopack bundling — it throws "Cannot find module
+// 'node:sqlite': Unsupported external type Url for commonjs reference" — and
+// because each parser swallows its errors, the symptom was silently zero
+// Hermes and OpenCode sessions in History, forever, with nothing logged.
+// process.getBuiltinModule (Node >= 22.3) is the API built for exactly this:
+// the bundler never sees it, and it stays synchronous and lazy.
+function sqlite(): typeof import("node:sqlite") {
+  const get = (process as unknown as { getBuiltinModule?: (id: string) => unknown }).getBuiltinModule;
+  if (!get) throw new Error("node:sqlite needs Node >= 22.3 (process.getBuiltinModule)");
+  return get("node:sqlite") as typeof import("node:sqlite");
+}
+
+// Discovery is best-effort, so a failing parser returns no sessions rather than
+// breaking History — but it must never fail INVISIBLY again. Warn once per
+// parser per process, so a real fault shows up without spamming every fetch.
+const warned = new Set<string>();
+function warnOnce(who: string, e: unknown) {
+  if (warned.has(who)) return;
+  warned.add(who);
+  console.warn(`[history] ${who} session discovery failed:`, (e as Error)?.message ?? e);
+}
+
 export interface ExternalSession { id: string; title: string; updatedAt: string; cwd: string }
 export interface ExternalAgentSessions { agentId: string; sessions: ExternalSession[] }
 
@@ -130,8 +153,7 @@ function opencodeSessions(): ExternalSession[] {
   const db = join(dataDir, "opencode", "opencode.db");
   if (!existsSync(db)) return [];
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+    const { DatabaseSync } = sqlite();
     const conn = new DatabaseSync(db, { readOnly: true });
     try {
       const rows = conn
@@ -141,7 +163,7 @@ function opencodeSessions(): ExternalSession[] {
         .filter((r) => r.directory)
         .map((r) => ({ id: r.id, cwd: r.directory, title: clip(r.title || "OpenCode session"), updatedAt: iso(r.time_updated) }));
     } finally { conn.close(); }
-  } catch { return []; } // locked db / schema change / old Node → just no sessions
+  } catch (e) { warnOnce("opencode", e); return []; } // locked db / schema change / old Node → just no sessions
 }
 
 // ── Hermes: sqlite at ~/.hermes/state.db (its canonical SessionDB) ────────────
@@ -153,8 +175,7 @@ function hermesSessions(): ExternalSession[] {
   const db = join(homedir(), ".hermes", "state.db");
   if (!existsSync(db)) return [];
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+    const { DatabaseSync } = sqlite();
     const conn = new DatabaseSync(db, { readOnly: true });
     try {
       const rows = conn
@@ -169,7 +190,7 @@ function hermesSessions(): ExternalSession[] {
         updatedAt: iso(r.ts * 1000), // REAL unix seconds → ms
       })).filter((s) => s.cwd);
     } finally { conn.close(); }
-  } catch { return []; }
+  } catch (e) { warnOnce("hermes", e); return []; }
 }
 
 function safeReaddir(dir: string): string[] {
