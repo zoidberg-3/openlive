@@ -559,3 +559,40 @@ whether the source restriction is deliberate.
   cannot cd there) — but it likely pruned 13.25.3 out from under the long-running
   session on 09-26: every OpenLive voice session is a real CC session and fires
   SessionStart hooks.
+
+---
+
+## ▶ RESUME — 2026-09-27 ~13:00. OpenLive interop DONE, Lucas-verified.
+
+### Shipped today (all committed, Lucas tested the UI himself)
+- `583b430` **An empty session/load is a failed resume.** Hermes answers `session/load`
+  for any session it did not create with `{}` (OK) and replays nothing. Every prompt
+  after that ends in `stopReason: "refusal"` with NO text, which is the "Hermes refused
+  to answer" Lucas saw. We now count the replayed updates; 0 = fall back to a fresh
+  session. The fallback is logged with `log.warn`.
+- `218a38e` **CLI-made Hermes sessions resume WITH context.** The fresh session gets a
+  recap read-only from `~/.hermes/state.db`: user/assistant text only, `active=1`,
+  newest 12, 600 chars each, about 4.7k max. MANGO-17 came back. The recap session is
+  `source=acp`, so it reopens natively after that. Side effect: Mnemosyne ingests the
+  recap text.
+- `f550c77` **History splits shared folders by agent** (e.g. lc → Claude Code / Hermes),
+  and search matches agent names. Hermes/OpenCode list the newest 500 (was 60), so
+  164/164 Hermes sessions now show; before it was 56.
+- Nothing under `~/.hermes` was modified. The success-on-failure bug is still
+  UNREPORTED to Nous. That is a public post and needs Lucas's approval.
+
+### Interop, final
+Every direction works for both Claude Code and Hermes.
+- `claude --resume` lists only the CURRENT folder's sessions, and hides the `sdk-cli`
+  ones (made by `claude -p`). PINEAPPLE-42 is `sdk-cli`: that was a test artefact, and
+  it opens by id.
+- OpenLive-made sessions are stamped `claude-vscode`, so the picker shows them.
+
+### Not yet off this laptop
+- 39 commits on `fix/webgpu-adapter-probe` exist ONLY locally. Lucas's fork is
+  `fork` = github.com/zoidberg-3/openlive. Pushing there is public, so ask first.
+- `data/` (openlive.db = OpenLive chats, 2.7G models, settings.json) is gitignored.
+  It lives on disk only.
+
+### Optional, offered: hide the `observer-sessions` folder (claude-mem's background runs).
+### Next: Claude Code transcript retention (cleanupPeriodDays) — see the 09-27 11:35 block.
