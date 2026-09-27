@@ -17,6 +17,7 @@ import { TerminalManager } from "./terminal-manager.js";
 import { killTree } from "./proc.js";
 import { readProjectMcpServers } from "./mcp-config.js";
 import { log } from "../log.js";
+import { hermesRecap } from "./hermes-recap.js";
 
 // Drive an external coding agent as the live brain over the Agent Client Protocol
 // (JSON-RPC over LOCAL stdio — "LSP for agents"). We spawn the agent's ACP adapter
@@ -285,6 +286,12 @@ export class AcpAgent implements Agent {
         this.replaying = false;
         this.replay = [];
       }
+    }
+    // Couldn't reopen a Hermes session and we have no transcript of our own to
+    // re-seed from (it was made outside OpenLive) → recap it from Hermes' store.
+    if (!resumed && this.opts.resumeSessionId && this.id === "hermes" && !this.seedText) {
+      this.seedText = hermesRecap(this.opts.resumeSessionId);
+      if (this.seedText) log.warn(`agent:${this.id}`, `seeded the fresh session with a recap of ${this.opts.resumeSessionId}`);
     }
     if (!resumed) {
       const r = await this.conn!.newSession({ cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
