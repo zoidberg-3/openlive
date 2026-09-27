@@ -493,3 +493,69 @@ Fast path lands ~82-86% of turns; the Whisper fallbacks are the slow ones.
 the old one-shot watchers — three separate times today a watcher silently
 stopped collecting (expired loop, filter that did not match a new log tag, and
 a CDP target lost on app restart) and a session's data was lost each time.
+
+---
+
+## ▶ RESUME — 2026-09-27 ~11:35. Session interop investigated; compacting.
+
+### Shipped this morning
+`a80bb49` **Hermes + OpenCode sessions NEVER appeared in History** — both parsers
+used `require("node:sqlite")`, which Turbopack cannot bundle ("Cannot find module
+'node:sqlite': Unsupported external type Url for commonjs reference"), and each
+parser's bare `catch { return []; }` swallowed it. Fixed with
+`process.getBuiltinModule("node:sqlite")`; History went 0 → 57 Hermes sessions.
+Catches now warn once instead of vanishing. Same bug class as the original
+silent onSpeechEnd catch.
+
+### Interop, measured
+| | Claude Code | Hermes |
+|---|---|---|
+| OpenLive sessions visible in CLI | ✅ | ✅ (`hermes sessions list`) |
+| CLI sessions visible in OpenLive | ✅ | ✅ since a80bb49 |
+| resume OpenLive session from terminal | ✅ `claude --resume` | ✅ `hermes -r <id>` |
+| resume CLI session inside OpenLive | ✅ PINEAPPLE-42 remembered | ❌ **Hermes refuses, then reports success** |
+
+**The Hermes gap is in ~/.hermes, read-only diagnosis, NOTHING MODIFIED:**
+- `acp_adapter/session.py:428` — `_restore()` does
+  `if row is None or row.get("source") != "acp": return None`. The ACP adapter
+  deliberately restores ONLY sessions whose source is `acp`; CLI (`cli`),
+  one-shot (`oneshot`), tui etc. are rejected by design. Likely because they lack
+  ACP metadata (`model_config` with `cwd`) the restore path expects.
+- `acp_adapter/server.py:622` — `load_session` turns that into `return None`,
+  which goes over the wire as a SUCCESSFUL empty reply. Stderr says
+  `load_session: session <id> not found`; the client is told OK. That is a real
+  bug and it is what made the failure silent.
+- Control: an OpenLive-created (acp) session loads with full history replay;
+  the CLI-created one returns OK with 0 replay.
+**Decision pending with Lucas** — my recommendation: (3) make OpenLive mark
+non-acp Hermes sessions view-only now; (2) report the success-on-failure bug to
+Nous (public post, needs approval); hold (1) patching Hermes until Nous says
+whether the source restriction is deliberate.
+
+### ⚠ Claude Code transcripts — Lucas is (rightly) upset
+- `cleanupPeriodDays` default **30** (docs: settings-reference + data-usage).
+  Transcripts under ~/.claude/projects older than that are deleted by a sweep
+  after each session start. Not set in his settings.
+- His last session before this run was **2026-08-23**, then a month off, so the
+  sweep took everything before 2026-08-28. That is the "months" he is missing.
+- **What survives:** `~/.claude/history.jsonl` — 2,100 entries, EVERYTHING HE
+  TYPED back to **2026-04-03** (display, project, sessionId). claude-mem:
+  1,205 summaries back to **2026-06-04**. Nothing earlier than April locally.
+- **No further loss until 2026-10-22** (oldest surviving transcript is 09-22).
+- To stop it: raise `cleanupPeriodDays` (e.g. 3650). Tradeoff to state:
+  transcripts are PLAINTEXT on disk. Privacy setting — ask, do not just set.
+  A backup of ~/.claude/projects is the belt-and-braces option.
+
+### Housekeeping
+- Session scratchpad (/tmp) was WIPED when the session closed — lost every
+  probe AND the voice test clips (fresh3.wav, sp4.wav) that the Moonshine v2
+  retest instructions reference. Dev tools now live in **`.dev/`** (listed in
+  `.git/info/exclude`). `.dev/watch-live.mjs` = self-reconnecting watcher.
+- Test sessions for interop: `~/interop-test` (PINEAPPLE-42 Claude, MANGO-17
+  Hermes). The Claude one does NOT show in `claude --resume` only because I made
+  it with `claude -p`, which stamps `sdk-cli` and the picker hides SDK sessions —
+  a test-setup artifact, not a real gap.
+- claude-mem's prune hook is SAFE (scoped to its plugin cache, exits if it
+  cannot cd there) — but it likely pruned 13.25.3 out from under the long-running
+  session on 09-26: every OpenLive voice session is a real CC session and fires
+  SessionStart hooks.
