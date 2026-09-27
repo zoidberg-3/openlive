@@ -579,7 +579,8 @@ whether the source restriction is deliberate.
   and search matches agent names. Hermes/OpenCode list the newest 500 (was 60), so
   164/164 Hermes sessions now show; before it was 56.
 - Nothing under `~/.hermes` was modified. The success-on-failure bug: NOT reporting —
-  Lucas's call 09-27 (Nous have their own voice path). Our fix works around it.
+  ALREADY REPORTED upstream as NousResearch/hermes-agent#74678 (fix PR #80843 open). Lucas approved; we added a comment
+  with the non-acp-source trigger: https://github.com/NousResearch/hermes-agent/issues/74678#issuecomment-5852922653
 
 ### Interop, final
 Every direction works for both Claude Code and Hermes.
