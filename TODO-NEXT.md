@@ -578,8 +578,8 @@ whether the source restriction is deliberate.
 - `f550c77` **History splits shared folders by agent** (e.g. lc → Claude Code / Hermes),
   and search matches agent names. Hermes/OpenCode list the newest 500 (was 60), so
   164/164 Hermes sessions now show; before it was 56.
-- Nothing under `~/.hermes` was modified. The success-on-failure bug is still
-  UNREPORTED to Nous. That is a public post and needs Lucas's approval.
+- Nothing under `~/.hermes` was modified. The success-on-failure bug: NOT reporting —
+  Lucas's call 09-27 (Nous have their own voice path). Our fix works around it.
 
 ### Interop, final
 Every direction works for both Claude Code and Hermes.
