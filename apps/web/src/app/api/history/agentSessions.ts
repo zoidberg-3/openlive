@@ -40,6 +40,7 @@ export interface ExternalSession { id: string; title: string; updatedAt: string;
 export interface ExternalAgentSessions { agentId: string; sessions: ExternalSession[] }
 
 const RECENT = 60;              // most-recent sessions per agent (by file mtime)
+const RECENT_DB = 500;          // sqlite-backed agents: one indexed query, no file scan — list (and search) far more
 const TITLE_SCAN_LINES = 80;    // lines to scan for a human title (past preambles)
 const clip = (s: string, n = 64) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n)}…` : t; };
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -158,7 +159,7 @@ function opencodeSessions(): ExternalSession[] {
     try {
       const rows = conn
         .prepare("SELECT id, directory, title, time_updated FROM session WHERE parent_id IS NULL ORDER BY time_updated DESC LIMIT ?")
-        .all(RECENT) as { id: string; directory: string; title: string; time_updated: number }[];
+        .all(RECENT_DB) as { id: string; directory: string; title: string; time_updated: number }[];
       return rows
         .filter((r) => r.directory)
         .map((r) => ({ id: r.id, cwd: r.directory, title: clip(r.title || "OpenCode session"), updatedAt: iso(r.time_updated) }));
@@ -182,7 +183,7 @@ function hermesSessions(): ExternalSession[] {
         .prepare(`SELECT id, cwd, title, COALESCE(ended_at, started_at) AS ts FROM sessions
                   WHERE parent_session_id IS NULL AND archived = 0
                   ORDER BY ts DESC LIMIT ?`)
-        .all(RECENT) as { id: string; cwd: string | null; title: string | null; ts: number }[];
+        .all(RECENT_DB) as { id: string; cwd: string | null; title: string | null; ts: number }[];
       return rows.map((r) => ({
         id: String(r.id),
         cwd: r.cwd ?? "",

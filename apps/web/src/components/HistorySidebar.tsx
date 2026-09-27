@@ -126,7 +126,8 @@ export function HistorySidebar() {
     qc.invalidateQueries({ queryKey: ["history", "v2"] });
   };
 
-  // Search: match chat titles (incl. local rename overrides) and workspace names.
+  // Search: match chat titles (incl. local rename overrides), workspace names,
+  // and the agent's name — so "hermes" lists every Hermes session.
   const q = query.trim().toLowerCase();
   const results = useMemo(() => {
     if (!q) return null;
@@ -135,7 +136,7 @@ export function HistorySidebar() {
       const wsHit = basename(ws.cwd).toLowerCase().includes(q) || ws.cwd.toLowerCase().includes(q);
       for (const chat of ws.chats) {
         const title = (overrides[chat.id] ?? chat.title).toLowerCase();
-        if (wsHit || title.includes(q)) out.push({ chat, cwd: ws.cwd });
+        if (wsHit || title.includes(q) || agentLabel(chat.agentId).toLowerCase().includes(q)) out.push({ chat, cwd: ws.cwd });
       }
     }
     return out.sort((a, b) => (a.chat.updatedAt < b.chat.updatedAt ? 1 : -1)).slice(0, 60);
@@ -163,7 +164,7 @@ export function HistorySidebar() {
             {searching ? (
               <>
                 <Search className="size-3.5 shrink-0 text-faint" />
-                <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search chats & folders…" spellCheck={false}
+                <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search chats, folders & agents…" spellCheck={false}
                   onKeyDown={(e) => { if (e.key === "Escape") { setQuery(""); setSearching(false); } }}
                   onBlur={() => { if (!query.trim()) setSearching(false); }}
                   className="h-8 min-w-0 flex-1 bg-transparent text-label text-foreground outline-none placeholder:text-faint" />
@@ -243,6 +244,10 @@ function WorkspaceNode({ ws, activeChatId, resume, requestDelete }: { ws: Histor
   // ponytail: the history feed can list the same session id more than once — dedupe.
   const chats = [...new Map(ws.chats.map((s) => [s.id, s])).values()];
   const label = ws.cwd ? basename(ws.cwd) : "No folder";
+  // A folder used by more than one agent (e.g. the home folder, shared by Claude
+  // Code and Hermes) splits into one sub-group per agent; a single-agent folder
+  // stays flat. Groups are ordered by their most recent session.
+  const groups = [...chats.reduce((m, c) => m.set(c.agentId, [...(m.get(c.agentId) ?? []), c]), new Map<string | null, HistoryChat[]>())];
 
   // opencode/hermes external sessions can't be deleted from here (live sqlite) —
   // they're skipped; the agent's own tooling manages them.
@@ -275,8 +280,39 @@ function WorkspaceNode({ ws, activeChatId, resume, requestDelete }: { ws: Histor
       </div>
       <Disclosure open={open}>
         <div className="mb-1 ml-[13px] flex flex-col gap-0.5 pl-2">
+          {groups.length > 1
+            ? groups.map(([agentId, list]) => (
+              <AgentGroup key={agentId ?? "openlive"} wsKey={ws.cwd || "none"} agentId={agentId} chats={list} cwd={ws.cwd} activeChatId={activeChatId} resume={resume} requestDelete={requestDelete} />
+            ))
+            : chats.map((c) => (
+              <ChatRow key={c.id} c={c} cwd={ws.cwd} activeChatId={activeChatId} resume={resume} requestDelete={requestDelete} />
+            ))}
+        </div>
+      </Disclosure>
+    </div>
+  );
+}
+
+// One agent's sessions inside a shared folder. Own open/closed state per folder.
+function AgentGroup({ wsKey, agentId, chats, cwd, activeChatId, resume, requestDelete }: { wsKey: string; agentId: string | null; chats: HistoryChat[]; cwd: string; activeChatId: string; resume: ResumeFn; requestDelete: RequestDelete }) {
+  const [open, setOpen] = usePersistedOpen(`hist:ws:${wsKey}:agent:${agentId ?? "openlive"}`);
+  return (
+    <div>
+      <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen(!open)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}
+        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-label text-foreground transition hover:bg-foreground/[0.05]">
+        <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground transition", open && "rotate-90")} />
+        <span className="grid size-4 shrink-0 place-items-center">
+          {agentId && isAgentId(agentId) ? <AgentIcon id={agentId} className="size-4" /> : <OpenLiveOrb size={15} />}
+        </span>
+        <span className="min-w-0 flex-1 truncate">{agentLabel(agentId)}</span>
+        <span className="text-micro text-faint">{chats.length}</span>
+        <span className="size-6 shrink-0" aria-hidden />{/* lines the count up with the folder row's (hover-delete slot) */}
+      </div>
+      <Disclosure open={open}>
+        <div className="mb-1 ml-[11px] flex flex-col gap-0.5 pl-2">
           {chats.map((c) => (
-            <ChatRow key={c.id} c={c} cwd={ws.cwd} activeChatId={activeChatId} resume={resume} requestDelete={requestDelete} />
+            <ChatRow key={c.id} c={c} cwd={cwd} activeChatId={activeChatId} resume={resume} requestDelete={requestDelete} />
           ))}
         </div>
       </Disclosure>
