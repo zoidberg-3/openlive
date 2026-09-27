@@ -115,6 +115,7 @@ export class AcpAgent implements Agent {
   private meta: AgentMeta = { models: [], currentModelId: null, modes: [], currentModeId: null, options: [], resumeAcrossRestart: true };
   private modelConfigId: string | null = null; // the ACP config option id for model selection
   private replaying = false;      // inside a session/load: fold updates into the replay buffer
+  private replayed = 0;           // transcript updates received during the current session/load
   private replay: ReplayMessage[] = []; // prior turns recovered from session/load replay
   private turnTools = new Map<string, ToolCallState>(); // this turn's tool calls, by id (cleared per turn)
   private terminals = new TerminalManager({
@@ -251,9 +252,17 @@ export class AcpAgent implements Agent {
       // would otherwise be set) by stamping the id up front.
       this.sessionId = this.opts.resumeSessionId;
       this.replaying = true;
+      this.replayed = 0;
       try {
         const r = await this.conn!.loadSession({ sessionId: this.opts.resumeSessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
         this.replaying = false;
+        // An OK that replayed NOTHING restored nothing: ACP requires the agent to
+        // stream the prior conversation during session/load. Hermes' ACP adapter,
+        // for one, only restores sessions it created itself and answers every
+        // other id with an empty success — the session is never opened, and every
+        // prompt to it then ends in stopReason "refusal" with no text. Treat it as
+        // a failed resume so a real session gets created below.
+        if (this.replayed === 0) throw new Error("load returned OK but replayed no history");
         this.reportMeta(r);
         resumed = true;
         // The agent restored the FULL conversation itself — drop our text recap
@@ -271,7 +280,7 @@ export class AcpAgent implements Agent {
         }
         if (this.replay.length) this.opts.onReplay?.(this.replay);
       } catch (e) {
-        log.debug(`agent:${this.id}`, `resume failed (${extractAcpError(e)}) — starting fresh`);
+        log.warn(`agent:${this.id}`, `resume of ${this.opts.resumeSessionId} failed (${extractAcpError(e)}) — starting fresh`);
       } finally {
         this.replaying = false;
         this.replay = [];
@@ -384,7 +393,7 @@ export class AcpAgent implements Agent {
         if (this.replaying) {
           if (u.sessionUpdate === "current_mode_update") { this.meta = { ...this.meta, currentModeId: u.currentModeId }; return; }
           if (u.sessionUpdate === "config_option_update") { this.applyConfig(u.configOptions); return; }
-          this.bufferReplay(u); return;
+          this.replayed++; this.bufferReplay(u); return;
         }
 
         // Turn-independent updates (mode / config) arrive any time, including
